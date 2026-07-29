@@ -1,4 +1,6 @@
-package org.wecode.tools;
+package org.wecode.tools.registry;
+
+import org.wecode.tools.spi.Tool;
 
 /**
  * Placeholder for tool registry / discovery.

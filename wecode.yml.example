@@ -1,0 +1,19 @@
+# we-code 本地配置模板
+# 使用方式：复制为 wecode.yml 后按需修改
+#   copy wecode.yml.example wecode.yml
+#
+# 优先级：命令行参数 > 环境变量 > 本文件 > 代码默认值
+# API Key 建议只用环境变量 WECODE_API_KEY，不要把真实 key 提交到 Git
+#
+# 下面 llm 段的键名与 LlmConfig 中 @JsonProperty 一一对应，改这里即可生效。
+
+llm:
+  base-url: https://api.deepseek.com
+  # api-key: 不推荐写在这里；请用环境变量 WECODE_API_KEY
+  model: deepseek-chat
+  temperature: 0.2
+  # 推理/思考（Provider 不支持时可删掉对应行）
+  reasoning-effort: medium
+  return-thinking: true
+  send-thinking: false
+  thinking-field-name: reasoning_content

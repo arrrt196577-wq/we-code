@@ -51,14 +51,47 @@ flowchart LR
 
 > 演示 GIF / asciinema 录屏后续补充。
 
+## 配置（YAML，无 Spring）
+
+复制模板并按需修改（`wecode.yml` 已加入 `.gitignore`）：
+
+```bash
+copy wecode.yml.example wecode.yml
+```
+
+```yaml
+llm:
+  base-url: https://api.deepseek.com
+  model: deepseek-chat
+  temperature: 0.2
+  reasoning-effort: medium
+  return-thinking: true
+  send-thinking: false
+  thinking-field-name: reasoning_content
+```
+
+这些键由 `LlmConfig` 的 `@JsonProperty` 映射；改 `wecode.yml` 即可，无需改 Java。
+API Key 请用环境变量（不要写进已提交的文件）：
+
+```bat
+set WECODE_API_KEY=sk-xxx
+```
+
+优先级：命令行 > 环境变量 > `wecode.yml` > 代码默认值。  
+常用环境变量：`WECODE_API_KEY` / `WECODE_BASE_URL` / `WECODE_MODEL` / `WECODE_TEMPERATURE` / `WECODE_REASONING_EFFORT` / `WECODE_RETURN_THINKING` / `WECODE_SEND_THINKING` / `WECODE_THINKING_FIELD_NAME`。
+
+实现位置：`cli` 模块的 `YamlConfigLoader` + `ConfigResolver`（Jackson YAML）。
+
 ## 构建
 
 ```bash
 mvn -q -DskipTests package
 ```
 
-运行入口（实现后）：
+先 `mvn install -DskipTests`，再运行（当前会打印已加载的 LLM 配置）：
 
 ```bash
-java -jar cli/target/cli-1.0-SNAPSHOT.jar
+mvn -q -pl cli exec:java
 ```
+
+或在 IDE 中运行 `org.wecode.cli.Main`（工作目录设为仓库根目录，以便读到 `wecode.yml`）。
