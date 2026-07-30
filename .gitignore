@@ -40,3 +40,6 @@ build/
 
 ### we-code local config (may contain secrets) ###
 wecode.yml
+
+### Docs ###
+docs/
