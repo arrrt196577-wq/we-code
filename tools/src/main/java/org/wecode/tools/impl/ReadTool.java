@@ -2,6 +2,7 @@ package org.wecode.tools.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.wecode.tools.path.WorkspacePaths;
 import org.wecode.tools.result.ToolResult;
 import org.wecode.tools.spi.Tool;
 import org.wecode.tools.spi.ToolContext;
@@ -17,7 +18,7 @@ import java.util.List;
 /**
  * 在 workspace 内读取文本文件，按行号格式返回给模型。
  * <p>
- * 路径沙箱校验后续统一做；此处仅按 workspace 解析相对路径。
+ * 路径经 {@link WorkspacePaths} 强制落在 workspace 内。
  */
 public final class ReadTool implements Tool {
 
@@ -84,15 +85,15 @@ public final class ReadTool implements Tool {
 
     @Override
     public ToolResult execute(ToolContext context, String toolCallId, String argumentsJson) {
-        // 解析参数；任何参数问题都以 failed observation 返回
+        // 解析参数与路径沙箱；任何参数/越界问题都以 failed observation 返回
         final ReadArgs args;
+        final Path file;
         try {
             args = parseArgs(argumentsJson);
+            file = WorkspacePaths.resolveInside(context.workspaceRoot(), args.path());
         } catch (IllegalArgumentException e) {
             return ToolResult.failed(toolCallId, NAME, e.getMessage());
         }
-
-        Path file = resolvePath(context.workspaceRoot(), args.path());
 
         // 存在性与类型检查
         if (!Files.exists(file)) {
@@ -171,19 +172,6 @@ public final class ReadTool implements Tool {
             throw new IllegalArgumentException(field + " must be >= 1");
         }
         return value;
-    }
-
-    /**
-     * 将用户路径解析为绝对路径：相对路径基于 workspace；绝对路径原样规范化。
-     * 注意：暂不做「必须落在 workspace 内」的沙箱校验。
-     */
-    static Path resolvePath(Path workspaceRoot, String rawPath) {
-        Path path = Path.of(rawPath);
-        // 绝对路径直接规范化；相对路径拼到 workspace 下
-        if (path.isAbsolute()) {
-            return path.normalize();
-        }
-        return workspaceRoot.resolve(path).normalize();
     }
 
     /**

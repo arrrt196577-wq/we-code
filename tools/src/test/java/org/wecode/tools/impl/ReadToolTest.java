@@ -124,4 +124,28 @@ class ReadToolTest {
         assertFalse(result.error());
         assertTrue(result.content().contains("1|class Main {}"));
     }
+
+    @Test
+    void failsWhenRelativePathEscapesWorkspace() throws Exception {
+        Path outside = workspace.getParent().resolve("outside-secret.txt");
+        Files.writeString(outside, "secret\n", StandardCharsets.UTF_8);
+
+        ToolResult result = tool.execute(context, "call-9", "{\"path\":\"../outside-secret.txt\"}");
+
+        assertTrue(result.error());
+        assertTrue(result.content().contains("Path escapes workspace"));
+    }
+
+    @Test
+    void failsWhenAbsolutePathEscapesWorkspace() throws Exception {
+        Path outside = workspace.getParent().resolve("abs-secret.txt");
+        Files.writeString(outside, "secret\n", StandardCharsets.UTF_8);
+        // JSON 中反斜杠需转义；toUri 风格用正斜杠更稳妥，这里用 toString 再转义
+        String abs = outside.toAbsolutePath().normalize().toString().replace("\\", "\\\\");
+
+        ToolResult result = tool.execute(context, "call-10", "{\"path\":\"" + abs + "\"}");
+
+        assertTrue(result.error());
+        assertTrue(result.content().contains("Path escapes workspace"));
+    }
 }

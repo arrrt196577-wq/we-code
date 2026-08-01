@@ -10,6 +10,7 @@ import org.wecode.cli.config.YamlConfigLoader;
 import org.wecode.llm.chat.OpenAiChatModel;
 import org.wecode.llm.model.Message;
 import org.wecode.session.Session;
+import org.wecode.tools.impl.EditTool;
 import org.wecode.tools.impl.GlobTool;
 import org.wecode.tools.impl.GrepTool;
 import org.wecode.tools.impl.ReadTool;
@@ -23,7 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * CLI 入口：解析参数、加载 yml、装配真 LLM + Read/Glob/Grep + AgentLoop 并运行任务。
+ * CLI 入口：解析参数、加载 yml、装配真 LLM + Read/Glob/Grep/Edit + AgentLoop 并运行任务。
  */
 public final class Main {
 
@@ -67,6 +68,7 @@ public final class Main {
         RipgrepClient ripgrep = RipgrepClient.fromEnvironment();
         registry.register(new GlobTool(ripgrep));
         registry.register(new GrepTool(ripgrep));
+        registry.register(new EditTool());
 
         Session session = new Session();
         session.append(Message.system(new PromptBuilder().buildSystemPrompt()));

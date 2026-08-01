@@ -2,6 +2,7 @@ package org.wecode.tools.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.wecode.tools.path.WorkspacePaths;
 import org.wecode.tools.result.ToolResult;
 import org.wecode.tools.rg.RipgrepClient;
 import org.wecode.tools.rg.RipgrepException;
@@ -17,7 +18,7 @@ import java.util.Objects;
 /**
  * 在 workspace 中按正则搜索文件内容（基于 ripgrep --json）。
  * <p>
- * 路径沙箱校验后续统一做。
+ * 路径经 {@link WorkspacePaths} 强制落在 workspace 内。
  */
 public final class GrepTool implements Tool {
 
@@ -85,13 +86,14 @@ public final class GrepTool implements Tool {
     @Override
     public ToolResult execute(ToolContext context, String toolCallId, String argumentsJson) {
         final GrepArgs args;
+        final Path target;
         try {
             args = parseArgs(argumentsJson);
+            target = WorkspacePaths.resolveInside(context.workspaceRoot(), args.path());
         } catch (IllegalArgumentException e) {
             return ToolResult.failed(toolCallId, NAME, e.getMessage());
         }
 
-        Path target = resolvePath(context.workspaceRoot(), args.path());
         // 目标不存在
         if (!Files.exists(target)) {
             return ToolResult.failed(toolCallId, NAME, "path not found: " + args.path());
@@ -197,17 +199,6 @@ public final class GrepTool implements Tool {
             include = includeNode.asText().trim();
         }
         return new GrepArgs(patternNode.asText().trim(), path, include);
-    }
-
-    /**
-     * 相对 workspace 解析；绝对路径直接规范化。暂不做沙箱校验。
-     */
-    static Path resolvePath(Path workspaceRoot, String rawPath) {
-        Path path = Path.of(rawPath);
-        if (path.isAbsolute()) {
-            return path.normalize();
-        }
-        return workspaceRoot.resolve(path).normalize();
     }
 
     private record GrepArgs(String pattern, String path, String include) {

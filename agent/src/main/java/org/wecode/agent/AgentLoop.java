@@ -90,7 +90,12 @@ public final class AgentLoop {
 
             // 串行执行本轮全部 tool call，再进入下一轮 chat
             for (ToolCall call : response.toolCalls()) {
-                stepLogger.accept("tool: " + call.name() + " id=" + call.id());
+                // 打印模型传入的参数 JSON，便于对照调试
+                stepLogger.accept(
+                        "tool: " + call.name()
+                                + " id=" + call.id()
+                                + " args=" + call.argumentsJson()
+                );
                 ToolResult result = toolRegistry.execute(
                         call.id(),
                         call.name(),
