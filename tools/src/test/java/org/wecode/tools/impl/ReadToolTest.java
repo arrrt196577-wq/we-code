@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link ReadTool} 单元测试：在临时 workspace 内验证读文件主路径。
+ * {@link ReadTool} 单元测试：在临时项目根目录内验证读文件主路径。
  */
 class ReadToolTest {
 
@@ -133,7 +133,7 @@ class ReadToolTest {
         ToolResult result = tool.execute(context, "call-9", "{\"path\":\"../outside-secret.txt\"}");
 
         assertTrue(result.error());
-        assertTrue(result.content().contains("Path escapes workspace"));
+        assertTrue(result.content().contains("Path escapes project root"));
     }
 
     @Test
@@ -146,6 +146,6 @@ class ReadToolTest {
         ToolResult result = tool.execute(context, "call-10", "{\"path\":\"" + abs + "\"}");
 
         assertTrue(result.error());
-        assertTrue(result.content().contains("Path escapes workspace"));
+        assertTrue(result.content().contains("Path escapes project root"));
     }
 }

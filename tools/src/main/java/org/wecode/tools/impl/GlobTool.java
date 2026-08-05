@@ -14,9 +14,9 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * 按 glob 模式在 workspace 中列文件（基于 ripgrep --files）。
+ * 按 glob 模式在项目根目录中列文件（基于 ripgrep --files）。
  * <p>
- * 路径经 {@link WorkspacePaths} 强制落在 workspace 内。
+ * 路径经 {@link WorkspacePaths} 强制落在项目根目录内。
  */
 public final class GlobTool implements Tool {
 
@@ -35,7 +35,7 @@ public final class GlobTool implements Tool {
                 },
                 "path": {
                   "type": "string",
-                  "description": "Directory to search in, relative to workspace. Defaults to workspace root."
+                  "description": "Directory to search in, relative to the project root. Defaults to the project root."
                 }
               },
               "required": ["pattern"]
@@ -68,7 +68,7 @@ public final class GlobTool implements Tool {
 
     @Override
     public String description() {
-        return "Find files by glob pattern in the workspace (e.g. **/*.java). "
+        return "Find files by glob pattern in the project (e.g. **/*.java). "
                 + "Returns matching file paths. Prefer this over shell find.";
     }
 
@@ -83,7 +83,7 @@ public final class GlobTool implements Tool {
         final Path searchRoot;
         try {
             args = parseArgs(argumentsJson);
-            searchRoot = WorkspacePaths.resolveInside(context.workspaceRoot(), args.path());
+            searchRoot = WorkspacePaths.resolveInside(context.projectRoot(), args.path());
         } catch (IllegalArgumentException e) {
             return ToolResult.failed(toolCallId, NAME, e.getMessage());
         }

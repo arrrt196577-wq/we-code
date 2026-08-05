@@ -45,7 +45,7 @@ class WorkspacePathsTest {
                 IllegalArgumentException.class,
                 () -> WorkspacePaths.resolveInside(workspace, "../outside")
         );
-        assertTrue(ex.getMessage().contains("Path escapes workspace"));
+        assertTrue(ex.getMessage().contains("Path escapes project root"));
     }
 
     @Test
@@ -56,7 +56,7 @@ class WorkspacePathsTest {
                 IllegalArgumentException.class,
                 () -> WorkspacePaths.resolveInside(workspace, "sub/../../outside")
         );
-        assertTrue(ex.getMessage().contains("Path escapes workspace"));
+        assertTrue(ex.getMessage().contains("Path escapes project root"));
     }
 
     @Test
@@ -78,7 +78,7 @@ class WorkspacePathsTest {
                 IllegalArgumentException.class,
                 () -> WorkspacePaths.resolveInside(workspace, outside.toAbsolutePath().toString())
         );
-        assertTrue(ex.getMessage().contains("Path escapes workspace"));
+        assertTrue(ex.getMessage().contains("Path escapes project root"));
     }
 
     @Test
@@ -91,7 +91,7 @@ class WorkspacePathsTest {
                 IllegalArgumentException.class,
                 () -> WorkspacePaths.resolveInside(workspace, sibling.toAbsolutePath().toString())
         );
-        assertTrue(ex.getMessage().contains("Path escapes workspace"));
+        assertTrue(ex.getMessage().contains("Path escapes project root"));
     }
 
     @Test

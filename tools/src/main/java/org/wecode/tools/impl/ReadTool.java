@@ -16,9 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 在 workspace 内读取文本文件，按行号格式返回给模型。
+ * 在项目根目录内读取文本文件，按行号格式返回给模型。
  * <p>
- * 路径经 {@link WorkspacePaths} 强制落在 workspace 内。
+ * 路径经 {@link WorkspacePaths} 强制落在项目根目录内。
  */
 public final class ReadTool implements Tool {
 
@@ -36,7 +36,7 @@ public final class ReadTool implements Tool {
               "properties": {
                 "path": {
                   "type": "string",
-                  "description": "File path relative to workspace (absolute path also accepted)"
+                  "description": "File path relative to the project root (absolute path also accepted)"
                 },
                 "offset": {
                   "type": "integer",
@@ -74,8 +74,8 @@ public final class ReadTool implements Tool {
 
     @Override
     public String description() {
-        return "Read a text file from the workspace. "
-                + "Use offset/limit for large files. Paths are relative to the workspace root.";
+        return "Read a text file from the project. "
+                + "Use offset/limit for large files. Paths are relative to the project root.";
     }
 
     @Override
@@ -90,7 +90,7 @@ public final class ReadTool implements Tool {
         final Path file;
         try {
             args = parseArgs(argumentsJson);
-            file = WorkspacePaths.resolveInside(context.workspaceRoot(), args.path());
+            file = WorkspacePaths.resolveInside(context.projectRoot(), args.path());
         } catch (IllegalArgumentException e) {
             return ToolResult.failed(toolCallId, NAME, e.getMessage());
         }

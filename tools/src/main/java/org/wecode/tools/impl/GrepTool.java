@@ -16,9 +16,9 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 在 workspace 中按正则搜索文件内容（基于 ripgrep --json）。
+ * 在项目根目录中按正则搜索文件内容（基于 ripgrep --json）。
  * <p>
- * 路径经 {@link WorkspacePaths} 强制落在 workspace 内。
+ * 路径经 {@link WorkspacePaths} 强制落在项目根目录内。
  */
 public final class GrepTool implements Tool {
 
@@ -37,7 +37,7 @@ public final class GrepTool implements Tool {
                 },
                 "path": {
                   "type": "string",
-                  "description": "File or directory to search in, relative to workspace. Defaults to workspace root."
+                  "description": "File or directory to search in, relative to the project root. Defaults to the project root."
                 },
                 "include": {
                   "type": "string",
@@ -74,7 +74,7 @@ public final class GrepTool implements Tool {
 
     @Override
     public String description() {
-        return "Search file contents in the workspace with a regex (powered by ripgrep). "
+        return "Search file contents in the project with a regex (powered by ripgrep). "
                 + "Optional include glob filters by file name. Returns path + line matches.";
     }
 
@@ -89,7 +89,7 @@ public final class GrepTool implements Tool {
         final Path target;
         try {
             args = parseArgs(argumentsJson);
-            target = WorkspacePaths.resolveInside(context.workspaceRoot(), args.path());
+            target = WorkspacePaths.resolveInside(context.projectRoot(), args.path());
         } catch (IllegalArgumentException e) {
             return ToolResult.failed(toolCallId, NAME, e.getMessage());
         }

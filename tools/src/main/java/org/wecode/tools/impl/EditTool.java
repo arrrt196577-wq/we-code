@@ -13,9 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * 在 workspace 内对文本文件做精确字符串替换，或用空 {@code old_string} 创建新文件。
+ * 在项目根目录内对文本文件做精确字符串替换，或用空 {@code old_string} 创建新文件。
  * <p>
- * 路径经 {@link WorkspacePaths} 强制落在 workspace 内。
+ * 路径经 {@link WorkspacePaths} 强制落在项目根目录内。
  */
 public final class EditTool implements Tool {
 
@@ -30,7 +30,7 @@ public final class EditTool implements Tool {
               "properties": {
                 "path": {
                   "type": "string",
-                  "description": "File path relative to workspace (absolute path also accepted)"
+                  "description": "File path relative to the project root (absolute path also accepted)"
                 },
                 "old_string": {
                   "type": "string",
@@ -89,7 +89,7 @@ public final class EditTool implements Tool {
         final Path file;
         try {
             args = parseArgs(argumentsJson);
-            file = WorkspacePaths.resolveInside(context.workspaceRoot(), args.path());
+            file = WorkspacePaths.resolveInside(context.projectRoot(), args.path());
         } catch (IllegalArgumentException e) {
             return ToolResult.failed(toolCallId, NAME, e.getMessage());
         }

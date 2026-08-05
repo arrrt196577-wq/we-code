@@ -130,7 +130,7 @@ class EditToolTest {
         );
 
         assertTrue(result.error());
-        assertTrue(result.content().contains("escapes workspace"));
+        assertTrue(result.content().contains("escapes project root"));
     }
 
     @Test
