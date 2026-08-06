@@ -29,6 +29,8 @@
         <jackson.version>2.22.1</jackson.version>
         <picocli.version>4.7.7</picocli.version>
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
+        <sqlite-jdbc.version>3.53.1.0</sqlite-jdbc.version>
+        <flyway.version>13.1.0</flyway.version>
     </properties>
 
     <dependencyManagement>
@@ -52,6 +54,21 @@
                 <groupId>com.baomidou</groupId>
                 <artifactId>mybatis-plus</artifactId>
                 <version>${mybatis-plus.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.xerial</groupId>
+                <artifactId>sqlite-jdbc</artifactId>
+                <version>${sqlite-jdbc.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-core</artifactId>
+                <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-database-nc-sqlite</artifactId>
+                <version>${flyway.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit.jupiter</groupId>

@@ -1,5 +1,7 @@
 package org.wecode.cli.config;
 
+import java.nio.file.Path;
+
 /**
  * 合并配置优先级：命令行 > 环境变量 > yml > 代码默认值。
  * <p>
@@ -90,6 +92,16 @@ public final class ConfigResolver {
                     "缺少 API Key：请设置环境变量 WECODE_API_KEY，或在 wecode.yml 的 llm.api-key 中配置"
             );
         }
+    }
+
+    /**
+     * 解析 WeCode 外部数据根目录。
+     *
+     * @param storage YAML 中的存储配置，可为空
+     * @return 已规范化的绝对外部数据目录
+     */
+    public static Path resolveStorageRoot(StorageConfig storage) {
+        return StoragePathResolver.resolveRoot(storage);
     }
 
     private static String firstNonBlank(String... values) {

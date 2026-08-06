@@ -7,6 +7,11 @@
 #
 # 下面 llm 段的键名与 LlmConfig 中 @JsonProperty 一一对应，改这里即可生效。
 
+# WeCode 外部运行期文件根目录。省略时默认使用 %LOCALAPPDATA%\wecode。
+# 可用环境变量 WECODE_HOME 临时覆盖；该目录不应放在项目仓库内。
+storage:
+  root: "C:/Users/<你的用户名>/AppData/Local/wecode"
+
 llm:
   base-url: https://api.deepseek.com
   # api-key: 不推荐写在这里；请用环境变量 WECODE_API_KEY

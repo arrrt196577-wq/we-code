@@ -23,6 +23,20 @@
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+        </dependency>
+        <!-- Flyway 在应用启动时执行 SQLite 表结构迁移。 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <!-- Flyway 13 将 SQLite 数据库支持拆分为独立模块，必须与 flyway-core 保持同版本。 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-nc-sqlite</artifactId>
+        </dependency>
     </dependencies>
 
 </project>

@@ -79,9 +79,11 @@ public final class Main implements Callable<Integer> {
 
         WeCodeConfig fileConfig = YamlConfigLoader.load(configPath);
         LlmConfig llm = ConfigResolver.resolveLlm(fileConfig.llm(), LlmCliOverrides.none());
+        Path storageRoot = ConfigResolver.resolveStorageRoot(fileConfig.storage());
         ConfigResolver.requireApiKey(llm);
 
         System.out.println("config file      : " + configPath.toAbsolutePath());
+        System.out.println("storage root     : " + storageRoot);
         System.out.println("launch directory : " + projectContext.launchDirectory());
         System.out.println("project root     : " + projectContext.projectRoot());
         System.out.println("project type     : " + projectContext.type());

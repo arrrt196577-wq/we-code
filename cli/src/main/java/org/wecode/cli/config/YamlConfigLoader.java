@@ -38,11 +38,11 @@ public final class YamlConfigLoader {
             if (config == null) {
                 return WeCodeConfig.defaults();
             }
-            // llm 段可省略
-            if (config.llm() == null) {
-                return new WeCodeConfig(LlmConfig.defaults());
-            }
-            return config;
+            // LLM 段可省略；保留 storage，避免只有存储配置时被默认值覆盖。
+            return new WeCodeConfig(
+                    config.llm() != null ? config.llm() : LlmConfig.defaults(),
+                    config.storage() != null ? config.storage() : StorageConfig.defaults()
+            );
         } catch (IOException e) {
             throw new IllegalStateException("无法读取配置文件: " + path.toAbsolutePath(), e);
         }
