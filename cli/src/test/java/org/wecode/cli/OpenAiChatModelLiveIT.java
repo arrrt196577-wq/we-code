@@ -3,15 +3,14 @@ package org.wecode.cli;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.wecode.cli.config.ConfigResolver;
-import org.wecode.cli.config.LlmCliOverrides;
-import org.wecode.cli.config.LlmConfig;
+import org.wecode.cli.config.ResolvedProviderConfig;
 import org.wecode.cli.config.WeCodeConfig;
 import org.wecode.cli.config.YamlConfigLoader;
-import org.wecode.llm.chat.OpenAiChatModel;
-import org.wecode.llm.chat.OpenAiChatModel.ThinkingOptions;
+import org.wecode.llm.chat.ChatModel;
 import org.wecode.llm.model.FinishReason;
 import org.wecode.llm.model.LlmResponse;
 import org.wecode.llm.model.Message;
+import org.wecode.llm.provider.ChatModelFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,27 +21,18 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * 真实发网 smoke：仅在仓库根（或上级）存在 {@code wecode.yml} 且配置了 api-key 时执行。
+ * 真实发网 smoke 测试：仅在仓库根目录存在新格式的 {@code wecode.yml}，且已设置所选
+ * Provider 对应密钥环境变量时执行。
  * <p>
- * 跑法：在仓库根执行 {@code mvn -pl cli test -Dtest=OpenAiChatModelLiveIT}
+ * 运行命令：{@code mvn -pl cli test -Dtest=OpenAiChatModelLiveIT}
  */
 class OpenAiChatModelLiveIT {
 
     @Test
     @EnabledIf("hasLocalConfigWithApiKey")
     void chatReturnsAssistantContent() {
-        LlmConfig llm = loadResolvedConfig();
-        OpenAiChatModel chatModel = new OpenAiChatModel(
-                llm.baseUrl(),
-                llm.apiKey(),
-                llm.model(),
-                llm.temperature(),
-                new ThinkingOptions(
-                        llm.reasoningEffort(),
-                        llm.returnThinking(),
-                        llm.thinkingFieldName()
-                )
-        );
+        ResolvedProviderConfig provider = loadResolvedConfig();
+        ChatModel chatModel = ChatModelFactory.create(provider.toProviderDefinition());
 
         LlmResponse response = chatModel.chat(
                 List.of(Message.user("请只回复：ok")),
@@ -52,46 +42,58 @@ class OpenAiChatModelLiveIT {
         assertEquals(FinishReason.STOP, response.finishReason());
         assertNotNull(response.content());
         assertFalse(response.content().isBlank());
+        System.out.println("live provider : " + provider.name());
         System.out.println("live content  : " + response.content());
-        // 配置了 return-thinking 时顺带打印，不强制断言（网关可能截断）
+        // 配置了思考模式且服务端返回思考内容时才打印，避免将空值当作异常。
         if (response.hasThinking()) {
             System.out.println("live thinking : " + response.thinking());
         }
     }
 
-    /** JUnit EnabledIf：本地有可发网的配置才跑。 */
+    /**
+     * 判断本机是否具备运行真实网络测试的最小条件。
+     *
+     * @return 配置文件存在且所选 Provider 的 API Key 可读取时返回 {@code true}
+     */
     static boolean hasLocalConfigWithApiKey() {
         Path path = resolveConfigPath();
-        // 没有配置文件则跳过
+        // 未提供本地配置时跳过真实发网测试。
         if (path == null) {
             return false;
         }
-        LlmConfig llm = ConfigResolver.resolveLlm(
-                YamlConfigLoader.load(path).llm(),
-                LlmCliOverrides.none()
-        );
-        return llm.apiKey() != null && !llm.apiKey().isBlank();
-    }
-
-    private static LlmConfig loadResolvedConfig() {
-        Path path = resolveConfigPath();
-        WeCodeConfig fileConfig = YamlConfigLoader.load(path);
-        return ConfigResolver.resolveLlm(fileConfig.llm(), LlmCliOverrides.none());
+        try {
+            ConfigResolver.resolveActiveProvider(YamlConfigLoader.load(path).llm());
+            return true;
+        } catch (IllegalStateException e) {
+            // 配置仍为旧格式、密钥不存在或内容不完整时不执行集成测试。
+            return false;
+        }
     }
 
     /**
-     * 解析 wecode.yml：优先当前目录，再试上一级（从 cli 模块跑 test 时）。
+     * 加载并解析当前激活的 Provider。
      *
-     * @return 存在的路径；都没有则 null
+     * @return 可直接构建 ChatModel 的运行时 Provider 配置
+     */
+    private static ResolvedProviderConfig loadResolvedConfig() {
+        Path path = resolveConfigPath();
+        WeCodeConfig fileConfig = YamlConfigLoader.load(path);
+        return ConfigResolver.resolveActiveProvider(fileConfig.llm());
+    }
+
+    /**
+     * 解析本地配置文件：优先当前目录，再尝试上一级目录。
+     *
+     * @return 存在的配置路径；未找到时返回 {@code null}
      */
     private static Path resolveConfigPath() {
         Path local = Path.of("wecode.yml");
-        // 仓库根直接跑
+        // 在仓库根目录运行测试时直接使用当前目录的配置。
         if (Files.isRegularFile(local)) {
             return local;
         }
         Path parent = Path.of("..", "wecode.yml");
-        // 从 cli 模块目录跑
+        // 在 cli 模块目录运行测试时使用上一级仓库根目录配置。
         if (Files.isRegularFile(parent)) {
             return parent;
         }

@@ -40,12 +40,13 @@ public final class OpenAiChatModel implements ChatModel {
      * @param thinkingFieldName 响应里思考字段名，默认 {@code reasoning_content}
      */
     public record ThinkingOptions(
+            Boolean enabled,
+            Boolean sendThinkingToggle,
             String reasoningEffort,
-            Boolean returnThinking,
             String thinkingFieldName
     ) {
         public static ThinkingOptions none() {
-            return new ThinkingOptions(null, null, null);
+            return new ThinkingOptions(null, null, null, null);
         }
 
         /** 解析用字段名；未配置时用常见默认值。 */
@@ -58,8 +59,13 @@ public final class OpenAiChatModel implements ChatModel {
         }
 
         /** 是否把思考文本写入 {@link LlmResponse}。 */
-        public boolean shouldReturnThinking() {
-            return Boolean.TRUE.equals(returnThinking);
+        public boolean shouldCaptureThinking() {
+            return Boolean.TRUE.equals(enabled);
+        }
+
+        /** 是否需要向服务端显式发送思考模式开关。 */
+        public boolean shouldSendThinkingToggle() {
+            return Boolean.TRUE.equals(sendThinkingToggle);
         }
     }
 
@@ -171,8 +177,15 @@ public final class OpenAiChatModel implements ChatModel {
         root.put("model", model);
         root.put("stream", false);
         // 有温度才写入，避免部分模型拒收 null
-        if (temperature != null) {
+        if (temperature != null && !thinkingOptions.shouldCaptureThinking()) {
             root.put("temperature", temperature);
+        }
+        // Provider 显式配置思考开关时，按 DeepSeek 等兼容接口的扩展格式发送。
+        if (thinkingOptions.shouldSendThinkingToggle()) {
+            root.putObject("thinking").put(
+                    "type",
+                    thinkingOptions.shouldCaptureThinking() ? "enabled" : "disabled"
+            );
         }
         // OpenAI 兼容推理强度；网关不支持时可能忽略或报错
         if (thinkingOptions.reasoningEffort() != null && !thinkingOptions.reasoningEffort().isBlank()) {
@@ -211,6 +224,14 @@ public final class OpenAiChatModel implements ChatModel {
             node.put("content", message.content());
         } else if (message.toolCalls().isEmpty()) {
             node.putNull("content");
+        }
+
+        // 思考模式 + 工具调用时，DeepSeek 要求后续请求完整回传 assistant 的推理内容。
+        if (message.role() == Role.ASSISTANT
+                && thinkingOptions.shouldCaptureThinking()
+                && message.reasoningContent() != null
+                && !message.reasoningContent().isBlank()) {
+            node.put(thinkingOptions.resolvedFieldName(), message.reasoningContent());
         }
 
         if (!message.toolCalls().isEmpty()) {
@@ -274,7 +295,7 @@ public final class OpenAiChatModel implements ChatModel {
         FinishReason finishReason = mapFinishReason(textOrNull(first.get("finish_reason")), toolCalls);
         // 仅在配置要求返回思考时填入；否则保持 null
         String thinking = null;
-        if (thinkingOptions.shouldReturnThinking()) {
+        if (thinkingOptions.shouldCaptureThinking()) {
             thinking = extractThinking(message, thinkingOptions.resolvedFieldName());
         }
         return new LlmResponse(content, toolCalls, finishReason, thinking);

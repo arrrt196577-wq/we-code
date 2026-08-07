@@ -3,14 +3,14 @@ package org.wecode.cli;
 import org.wecode.agent.AgentLoop;
 import org.wecode.agent.PromptBuilder;
 import org.wecode.cli.config.ConfigResolver;
-import org.wecode.cli.config.LlmCliOverrides;
-import org.wecode.cli.config.LlmConfig;
+import org.wecode.cli.config.ResolvedProviderConfig;
 import org.wecode.cli.config.WeCodeConfig;
 import org.wecode.cli.config.YamlConfigLoader;
 import org.wecode.cli.project.ProjectContext;
 import org.wecode.cli.project.ProjectResolver;
-import org.wecode.llm.chat.OpenAiChatModel;
+import org.wecode.llm.chat.ChatModel;
 import org.wecode.llm.model.Message;
+import org.wecode.llm.provider.ChatModelFactory;
 import org.wecode.session.Session;
 import org.wecode.tools.impl.EditTool;
 import org.wecode.tools.impl.GlobTool;
@@ -78,30 +78,21 @@ public final class Main implements Callable<Integer> {
         String task = String.join(" ", taskParts);
 
         WeCodeConfig fileConfig = YamlConfigLoader.load(configPath);
-        LlmConfig llm = ConfigResolver.resolveLlm(fileConfig.llm(), LlmCliOverrides.none());
+        ResolvedProviderConfig provider = ConfigResolver.resolveActiveProvider(fileConfig.llm());
         Path storageRoot = ConfigResolver.resolveStorageRoot(fileConfig.storage());
-        ConfigResolver.requireApiKey(llm);
 
         System.out.println("config file      : " + configPath.toAbsolutePath());
         System.out.println("storage root     : " + storageRoot);
         System.out.println("launch directory : " + projectContext.launchDirectory());
         System.out.println("project root     : " + projectContext.projectRoot());
         System.out.println("project type     : " + projectContext.type());
-        System.out.println("model            : " + llm.model());
+        System.out.println("provider         : " + provider.name());
+        System.out.println("protocol         : " + provider.protocol());
+        System.out.println("model            : " + provider.model());
         System.out.println("task             : " + task);
         System.out.println("---");
 
-        OpenAiChatModel chatModel = new OpenAiChatModel(
-                llm.baseUrl(),
-                llm.apiKey(),
-                llm.model(),
-                llm.temperature(),
-                new OpenAiChatModel.ThinkingOptions(
-                        llm.reasoningEffort(),
-                        llm.returnThinking(),
-                        llm.thinkingFieldName()
-                )
-        );
+        ChatModel chatModel = ChatModelFactory.create(provider.toProviderDefinition());
 
         ToolRegistry registry = new ToolRegistry();
         registry.register(new ReadTool());

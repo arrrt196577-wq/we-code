@@ -1,97 +1,75 @@
 # we-code
 
-轻量级 coding agent 框架（骨架阶段，业务逻辑待实现）。
+轻量级 Coding Agent 框架，当前处于开发阶段。
 
 ## 模块结构
 
-```
+```text
 we-code/
-├── cli/           # 入口：参数解析、组装依赖、启动会话
-├── agent/         # loop、prompt、停止条件
-├── tools/         # 每个工具一个类/文件
-├── llm/           # provider 适配
-├── session/       # 历史与状态
-├── permission/    # 确认策略
-├── demos/         # 固定可复现演示任务
-└── README.md
+├── cli/           # 命令行入口、配置解析和依赖组装
+├── agent/         # Agent 循环、提示词和停止条件
+├── tools/         # 工具契约与实现
+├── llm/           # LLM 协议适配器
+├── session/       # 会话历史与状态
+├── permission/    # 工具确认策略
+└── demos/         # 可复现演示任务
 ```
 
-## 架构
+## LLM 配置
 
-```mermaid
-flowchart LR
-    User -->|命令/任务| CLI
-    CLI --> Agent
-    Agent -->|拼装上下文| Prompt
-    Agent -->|调用| LLM
-    Agent -->|执行| Tools
-    Agent -->|读写| Session
-    Tools -->|确认| Permission
-    LLM -->|provider| ProviderAdapters
-```
+复制模板后创建本地配置。`wecode.yml` 已被 Git 忽略，不应提交 API Key。
 
-调用关系概览：
-
-| 模块 | 职责 | 主要依赖 |
-|------|------|----------|
-| `cli` | 进程入口与装配 | agent / session / permission / llm / tools |
-| `agent` | 思考-执行循环、提示词、停止条件 | llm / tools / session / permission |
-| `tools` | 工具契约与注册 | permission |
-| `llm` | LLM Provider 抽象与适配 | — |
-| `session` | 会话历史与持久化 | — |
-| `permission` | 工具确认与授权策略 | — |
-
-## 演示
-
-见 [`demos/`](./demos/)：
-
-1. [`01-hello-refactor`](./demos/01-hello-refactor/) — 小范围重构
-2. [`02-fix-null-npe`](./demos/02-fix-null-npe/) — 修复空指针
-3. [`03-add-unit-test`](./demos/03-add-unit-test/) — 补单元测试
-
-> 演示 GIF / asciinema 录屏后续补充。
-
-## 配置（YAML，无 Spring）
-
-复制模板并按需修改（`wecode.yml` 已加入 `.gitignore`）：
-
-```bash
+```bat
 copy wecode.yml.example wecode.yml
 ```
 
 ```yaml
 llm:
-  base-url: https://api.deepseek.com
-  model: deepseek-chat
-  temperature: 0.2
-  reasoning-effort: medium
-  return-thinking: true
-  send-thinking: false
-  thinking-field-name: reasoning_content
+  active-provider: deepseek
+
+  providers:
+    deepseek:
+      protocol: openai-chat-completions
+      base-url: https://api.deepseek.com
+      # 本地 wecode.yml 已被 .gitignore 忽略，可直接填写 API Key。
+      api-key: ""
+      model: deepseek-v4-flash
+      thinking:
+        enabled: true
+        reasoning-effort: high
+        response-field: reasoning_content
+        send-toggle: true
+
+    openai:
+      protocol: openai-chat-completions
+      base-url: https://api.openai.com/v1
+      api-key: ""
+      model: gpt-5.4
 ```
 
-这些键由 `LlmConfig` 的 `@JsonProperty` 映射；改 `wecode.yml` 即可，无需改 Java。
-API Key 请用环境变量（不要写进已提交的文件）：
+`active-provider` 是配置档案名；`protocol` 才决定使用的 Java 协议适配器。当前支持：
 
-```bat
-set WECODE_API_KEY=sk-xxx
-```
+- `openai-chat-completions`：兼容 OpenAI Chat Completions 的服务，包括 DeepSeek 和内部网关。
 
-优先级：命令行 > 环境变量 > `wecode.yml` > 代码默认值。  
-常用环境变量：`WECODE_API_KEY` / `WECODE_BASE_URL` / `WECODE_MODEL` / `WECODE_TEMPERATURE` / `WECODE_REASONING_EFFORT` / `WECODE_RETURN_THINKING` / `WECODE_SEND_THINKING` / `WECODE_THINKING_FIELD_NAME`。
+因此，新增一个已兼容该协议的 Provider 只需要在 `providers` 下增加一个 YAML 节点，然后修改 `active-provider`；只有接入新的 API 协议时才需要增加 Java 适配器。
 
-实现位置：`cli` 模块的 `YamlConfigLoader` + `ConfigResolver`（Jackson YAML）。
+每个 Provider 可以使用 `api-key` 直接配置密钥，也可使用 `api-key-env` 指定环境变量。两者同时存在时，`api-key` 优先。由于直接配置密钥有误提交或被备份工具同步的风险，仅应写入已被 Git 忽略的本地 `wecode.yml`，绝不能写入 `wecode.yml.example`。
+
+### 配置升级说明
+
+配置格式已升级为多 Provider 档案。旧的 `llm.base-url`、`llm.api-key`、`llm.model` 及 `reasoning-*` 等平铺字段不再支持。开发阶段采用破坏性升级，不提供运行时兼容或自动迁移。
+
+DeepSeek 的思考模式与工具调用同时开启时，会自动保存并回传 `reasoning_content`，以保证后续工具轮次可继续执行。思考模式下不发送 `temperature`。
 
 ## 构建
 
 ```bash
-mvn -q -DskipTests package
+mvn -q test
 ```
 
-先 `mvn install -DskipTests`，再运行（当前会打印已加载的 LLM 配置）：
+安装当前多模块工程后运行 CLI：
 
 ```bash
-mvn -q -pl cli exec:java
+mvn -q install
+mvn -q -pl cli exec:java '-Dexec.args=你的任务'
 ```
-
-或在 IDE 中运行 `org.wecode.cli.Main`（工作目录设为仓库根目录，以便读到 `wecode.yml`）。

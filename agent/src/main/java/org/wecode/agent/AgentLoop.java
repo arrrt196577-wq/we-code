@@ -77,7 +77,8 @@ public final class AgentLoop {
             LlmResponse response = chatModel.chat(session.messages(), tools);
 
             // 先把本轮 assistant（含可能的 tool_calls）写入历史
-            session.append(Message.assistant(response.content(), response.toolCalls()));
+            // 保存本轮思考内容，确保要求回传推理字段的 Provider 能完成后续工具调用。
+            session.append(Message.assistant(response.content(), response.toolCalls(), response.thinking()));
             if (response.content() != null && !response.content().isBlank()) {
                 lastContent = response.content();
             }

@@ -1,24 +1,33 @@
 # we-code 本地配置模板
-# 使用方式：复制为 wecode.yml 后按需修改
+# 使用方式：复制为 wecode.yml 后按需修改。
 #   copy wecode.yml.example wecode.yml
 #
-# 优先级：命令行参数 > 环境变量 > 本文件 > 代码默认值
-# API Key 建议只用环境变量 WECODE_API_KEY，不要把真实 key 提交到 Git
-#
-# 下面 llm 段的键名与 LlmConfig 中 @JsonProperty 一一对应，改这里即可生效。
+# 本模板不填写真实 API Key。复制为被 Git 忽略的 wecode.yml 后，可在各 Provider 的 api-key 填写。
 
-# WeCode 外部运行期文件根目录。省略时默认使用 %LOCALAPPDATA%\wecode。
-# 可用环境变量 WECODE_HOME 临时覆盖；该目录不应放在项目仓库内。
 storage:
   root: "C:/Users/<你的用户名>/AppData/Local/wecode"
 
 llm:
-  base-url: https://api.deepseek.com
-  # api-key: 不推荐写在这里；请用环境变量 WECODE_API_KEY
-  model: deepseek-chat
-  temperature: 0.2
-  # 推理/思考（Provider 不支持时可删掉对应行）
-  reasoning-effort: medium
-  return-thinking: true
-  send-thinking: false
-  thinking-field-name: reasoning_content
+  # 只修改此项即可在下方已定义的 Provider 档案之间切换。
+  active-provider: deepseek
+
+  providers:
+    deepseek:
+      # 同一 protocol 的 Provider 共用 Java 适配器；新增兼容服务只需新增一个配置节点。
+      protocol: openai-chat-completions
+      base-url: https://api.deepseek.com
+      api-key: ""
+      model: deepseek-v4-flash
+      thinking:
+        # DeepSeek 工具调用的思考链会自动保存并在下一轮请求中回传。
+        enabled: true
+        reasoning-effort: high
+        response-field: reasoning_content
+        send-toggle: true
+
+    openai:
+      protocol: openai-chat-completions
+      base-url: https://api.openai.com/v1
+      api-key: ""
+      model: gpt-5.4
+      temperature: 0.2
