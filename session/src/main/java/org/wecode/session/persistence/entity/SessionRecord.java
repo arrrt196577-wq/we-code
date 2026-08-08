@@ -18,7 +18,7 @@ import java.util.Objects;
  * @param updatedAt            最后更新时间，UTC epoch milliseconds
  * @param metadataJson         会话级扩展 JSON 对象，约定包含格式版本
  */
-public record Session(
+public record SessionRecord(
         String id,
         String projectRootPath,
         String workingDirectoryPath,
@@ -33,7 +33,7 @@ public record Session(
     /**
      * 校验从数据库读取或即将写入数据库的会话基础字段。
      */
-    public Session {
+    public SessionRecord {
         id = requireNonBlank(id, "id");
         projectRootPath = requireNonBlank(projectRootPath, "projectRootPath");
         workingDirectoryPath = requireNonBlank(workingDirectoryPath, "workingDirectoryPath");

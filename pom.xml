@@ -13,6 +13,7 @@
     <description>Lightweight coding agent framework</description>
 
     <modules>
+        <module>id</module>
         <module>cli</module>
         <module>agent</module>
         <module>tools</module>
@@ -78,6 +79,11 @@
             </dependency>
             <dependency>
                 <groupId>org.wecode</groupId>
+                <artifactId>id</artifactId>
+                <version>${we-code.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.wecode</groupId>
                 <artifactId>cli</artifactId>
                 <version>${we-code.version}</version>
             </dependency>
@@ -108,5 +114,16 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!-- 统一使用支持 JUnit 5 的 Surefire，避免子模块测试被旧默认版本跳过。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

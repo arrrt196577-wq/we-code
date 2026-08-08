@@ -4,7 +4,7 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="org.wecode.session.persistence.mapper.MessagePersistenceMapper">
 
-    <resultMap id="messageResultMap" type="org.wecode.session.persistence.entity.Message">
+    <resultMap id="messageRecordResultMap" type="org.wecode.session.persistence.entity.MessageRecord">
         <constructor>
             <arg column="session_id" javaType="java.lang.String"/>
             <arg column="seq" javaType="long"/>
@@ -17,7 +17,7 @@
         </constructor>
     </resultMap>
 
-    <insert id="insert" parameterType="org.wecode.session.persistence.entity.Message">
+    <insert id="insert" parameterType="org.wecode.session.persistence.entity.MessageRecord">
         INSERT INTO messages (
             session_id, seq, agent_round_no, role,
             content, tool_call_id, created_at, payload_json
@@ -27,7 +27,7 @@
         )
     </insert>
 
-    <select id="findAllBySessionId" resultMap="messageResultMap">
+    <select id="findAllBySessionId" resultMap="messageRecordResultMap">
         SELECT session_id, seq, agent_round_no, role,
                content, tool_call_id, created_at, payload_json
         FROM messages
@@ -35,7 +35,7 @@
         ORDER BY seq ASC
     </select>
 
-    <select id="findRecentBySessionId" resultMap="messageResultMap">
+    <select id="findRecentBySessionId" resultMap="messageRecordResultMap">
         SELECT session_id, seq, agent_round_no, role,
                content, tool_call_id, created_at, payload_json
         FROM (

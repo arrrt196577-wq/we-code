@@ -1,7 +1,7 @@
 package org.wecode.session.persistence.mapper;
 
 import org.apache.ibatis.annotations.Param;
-import org.wecode.session.persistence.entity.Session;
+import org.wecode.session.persistence.entity.SessionRecord;
 import org.wecode.session.persistence.entity.SessionStatus;
 
 import java.util.List;
@@ -20,7 +20,7 @@ public interface SessionPersistenceMapper {
      * @param session 待持久化的会话元数据
      * @return 成功插入的行数
      */
-    int insert(Session session);
+    int insert(SessionRecord session);
 
     /**
      * 按会话标识读取会话元数据，用于进入或恢复会话。
@@ -28,7 +28,7 @@ public interface SessionPersistenceMapper {
      * @param sessionId 会话唯一标识
      * @return 会话不存在时为 {@code null}
      */
-    Session findById(@Param("sessionId") String sessionId);
+    SessionRecord findById(@Param("sessionId") String sessionId);
 
     /**
      * 以乐观锁推进会话消息序号，并同步更新运行状态。
@@ -55,7 +55,7 @@ public interface SessionPersistenceMapper {
      *
      * @return 需要恢复或标记为中断的会话列表
      */
-    List<Session> findRecoverable();
+    List<SessionRecord> findRecoverable();
 
     /**
      * 启动恢复阶段将遗留的运行中会话标记为中断。

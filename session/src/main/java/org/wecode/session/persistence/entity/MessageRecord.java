@@ -19,7 +19,7 @@ import java.util.Objects;
  * @param createdAt    写入时间，UTC epoch milliseconds
  * @param payloadJson  消息级扩展 JSON 对象，约定包含格式版本及 toolCalls 等角色特有数据
  */
-public record Message(
+public record MessageRecord(
         String sessionId,
         long seq,
         Long agentRoundNo,
@@ -33,7 +33,7 @@ public record Message(
     /**
      * 校验消息排序、轮次以及角色相关字段，防止无效记录进入持久化层。
      */
-    public Message {
+    public MessageRecord {
         sessionId = requireNonBlank(sessionId, "sessionId");
         role = Objects.requireNonNull(role, "role");
         payloadJson = requireNonBlank(payloadJson, "payloadJson");

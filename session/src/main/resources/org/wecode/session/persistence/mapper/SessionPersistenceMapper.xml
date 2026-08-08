@@ -4,7 +4,7 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="org.wecode.session.persistence.mapper.SessionPersistenceMapper">
 
-    <resultMap id="sessionResultMap" type="org.wecode.session.persistence.entity.Session">
+    <resultMap id="sessionRecordResultMap" type="org.wecode.session.persistence.entity.SessionRecord">
         <constructor>
             <idArg column="id" javaType="java.lang.String"/>
             <arg column="project_root_path" javaType="java.lang.String"/>
@@ -18,7 +18,7 @@
         </constructor>
     </resultMap>
 
-    <insert id="insert" parameterType="org.wecode.session.persistence.entity.Session">
+    <insert id="insert" parameterType="org.wecode.session.persistence.entity.SessionRecord">
         INSERT INTO sessions (
             id, project_root_path, working_directory_path,
             status, last_seq, version, created_at, updated_at, metadata_json
@@ -28,7 +28,7 @@
         )
     </insert>
 
-    <select id="findById" resultMap="sessionResultMap">
+    <select id="findById" resultMap="sessionRecordResultMap">
         SELECT id, project_root_path, working_directory_path,
                status, last_seq, version, created_at, updated_at, metadata_json
         FROM sessions
@@ -50,7 +50,7 @@
           AND status &lt;&gt; 'ARCHIVED'
     </update>
 
-    <select id="findRecoverable" resultMap="sessionResultMap">
+    <select id="findRecoverable" resultMap="sessionRecordResultMap">
         SELECT id, project_root_path, working_directory_path,
                status, last_seq, version, created_at, updated_at, metadata_json
         FROM sessions

@@ -1,6 +1,4 @@
 -- 会话持久化表。SQLite 的外键约束必须在每个连接创建后开启。
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS sessions (
     id                     TEXT PRIMARY KEY,
     project_root_path      TEXT NOT NULL,

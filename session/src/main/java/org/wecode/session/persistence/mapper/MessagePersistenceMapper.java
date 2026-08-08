@@ -1,7 +1,7 @@
 package org.wecode.session.persistence.mapper;
 
 import org.apache.ibatis.annotations.Param;
-import org.wecode.session.persistence.entity.Message;
+import org.wecode.session.persistence.entity.MessageRecord;
 
 import java.util.List;
 
@@ -18,7 +18,7 @@ public interface MessagePersistenceMapper {
      * @param message 待写入消息
      * @return 成功插入的行数
      */
-    int insert(Message message);
+    int insert(MessageRecord message);
 
     /**
      * 按消息序号升序读取完整会话历史，用于完整恢复或历史查看。
@@ -26,7 +26,7 @@ public interface MessagePersistenceMapper {
      * @param sessionId 会话唯一标识
      * @return 会话的全部持久化消息
      */
-    List<Message> findAllBySessionId(@Param("sessionId") String sessionId);
+    List<MessageRecord> findAllBySessionId(@Param("sessionId") String sessionId);
 
     /**
      * 读取最近的若干条消息，并按正序返回，供一次 LLM 调用构建上下文。
@@ -35,5 +35,5 @@ public interface MessagePersistenceMapper {
      * @param limit     最大消息条数
      * @return 从旧到新的最近消息
      */
-    List<Message> findRecentBySessionId(@Param("sessionId") String sessionId, @Param("limit") int limit);
+    List<MessageRecord> findRecentBySessionId(@Param("sessionId") String sessionId, @Param("limit") int limit);
 }
