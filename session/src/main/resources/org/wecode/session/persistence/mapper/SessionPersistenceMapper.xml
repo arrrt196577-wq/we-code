@@ -10,10 +10,10 @@
             <arg column="project_root_path" javaType="java.lang.String"/>
             <arg column="working_directory_path" javaType="java.lang.String"/>
             <arg column="status" javaType="org.wecode.session.persistence.entity.SessionStatus"/>
-            <arg column="last_seq" javaType="long"/>
-            <arg column="version" javaType="long"/>
-            <arg column="created_at" javaType="long"/>
-            <arg column="updated_at" javaType="long"/>
+            <arg column="last_sequence_no" javaType="_long"/>
+            <arg column="version" javaType="_long"/>
+            <arg column="created_at" javaType="_long"/>
+            <arg column="updated_at" javaType="_long"/>
             <arg column="metadata_json" javaType="java.lang.String"/>
         </constructor>
     </resultMap>
@@ -21,38 +21,38 @@
     <insert id="insert" parameterType="org.wecode.session.persistence.entity.SessionRecord">
         INSERT INTO sessions (
             id, project_root_path, working_directory_path,
-            status, last_seq, version, created_at, updated_at, metadata_json
+            status, last_sequence_no, version, created_at, updated_at, metadata_json
         ) VALUES (
             #{id}, #{projectRootPath}, #{workingDirectoryPath},
-            #{status}, #{lastSeq}, #{version}, #{createdAt}, #{updatedAt}, #{metadataJson}
+            #{status}, #{lastSequenceNo}, #{version}, #{createdAt}, #{updatedAt}, #{metadataJson}
         )
     </insert>
 
     <select id="findById" resultMap="sessionRecordResultMap">
         SELECT id, project_root_path, working_directory_path,
-               status, last_seq, version, created_at, updated_at, metadata_json
+               status, last_sequence_no, version, created_at, updated_at, metadata_json
         FROM sessions
         WHERE id = #{sessionId}
     </select>
 
     <!--
-        调用方必须检查影响行数。只有本语句成功后，才能在同一事务中追加 messages 记录。
+        调用方必须检查影响行数。只有本语句成功后，才能在同一事务中追加 session_message 记录。
     -->
     <update id="advanceForMessageAppend">
         UPDATE sessions
-        SET last_seq = #{newSeq},
+        SET last_sequence_no = #{newSequenceNo},
             version = version + 1,
             status = #{status},
             updated_at = #{updatedAt}
         WHERE id = #{sessionId}
           AND version = #{expectedVersion}
-          AND last_seq = #{expectedLastSeq}
+          AND last_sequence_no = #{expectedLastSequenceNo}
           AND status &lt;&gt; 'ARCHIVED'
     </update>
 
     <select id="findRecoverable" resultMap="sessionRecordResultMap">
         SELECT id, project_root_path, working_directory_path,
-               status, last_seq, version, created_at, updated_at, metadata_json
+               status, last_sequence_no, version, created_at, updated_at, metadata_json
         FROM sessions
         WHERE status IN ('RUNNING', 'INTERRUPTED')
         ORDER BY updated_at ASC, id ASC

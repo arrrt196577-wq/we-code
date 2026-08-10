@@ -8,8 +8,9 @@ import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
 import org.flywaydb.core.Flyway;
 import org.sqlite.SQLiteConfig;
 import org.sqlite.SQLiteDataSource;
-import org.wecode.session.persistence.mapper.MessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
+import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
+import org.wecode.session.persistence.mapper.ToolExecutionPersistenceMapper;
 
 import javax.sql.DataSource;
 import java.nio.file.Path;
@@ -72,7 +73,8 @@ final class SessionPersistenceConfiguration {
         );
         Configuration configuration = new Configuration(environment);
         configuration.addMapper(SessionPersistenceMapper.class);
-        configuration.addMapper(MessagePersistenceMapper.class);
+        configuration.addMapper(SessionMessagePersistenceMapper.class);
+        configuration.addMapper(ToolExecutionPersistenceMapper.class);
         return new SqlSessionFactoryBuilder().build(configuration);
     }
 }

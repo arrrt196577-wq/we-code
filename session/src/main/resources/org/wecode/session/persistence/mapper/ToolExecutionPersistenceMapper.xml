@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.wecode.session.persistence.mapper.ToolExecutionPersistenceMapper">
+
+    <resultMap id="toolExecutionRecordResultMap" type="org.wecode.session.persistence.entity.ToolExecutionRecord">
+        <constructor>
+            <idArg column="id" javaType="java.lang.String"/>
+            <arg column="assistant_message_id" javaType="java.lang.String"/>
+            <arg column="call_id" javaType="java.lang.String"/>
+            <arg column="call_index" javaType="_int"/>
+            <arg column="tool_name" javaType="java.lang.String"/>
+            <arg column="arguments_json" javaType="java.lang.String"/>
+            <arg column="status" javaType="org.wecode.session.persistence.entity.ToolExecutionStatus"/>
+            <arg column="result_json" javaType="java.lang.String"/>
+            <arg column="attempt_count" javaType="_int"/>
+            <arg column="lease_token" javaType="java.lang.String"/>
+            <arg column="lease_until" javaType="java.lang.Long"/>
+            <arg column="revision" javaType="_long"/>
+            <arg column="created_at" javaType="_long"/>
+            <arg column="started_at" javaType="java.lang.Long"/>
+            <arg column="finished_at" javaType="java.lang.Long"/>
+            <arg column="updated_at" javaType="_long"/>
+        </constructor>
+    </resultMap>
+
+    <insert id="insert" parameterType="org.wecode.session.persistence.entity.ToolExecutionRecord">
+        INSERT INTO tool_execution (
+            id, assistant_message_id, call_id, call_index, tool_name, arguments_json,
+            status, result_json, attempt_count, lease_token, lease_until, revision,
+            created_at, started_at, finished_at, updated_at
+        ) VALUES (
+            #{id}, #{assistantMessageId}, #{callId}, #{callIndex}, #{toolName}, #{argumentsJson},
+            #{status}, #{resultJson}, #{attemptCount}, #{leaseToken}, #{leaseUntil}, #{revision},
+            #{createdAt}, #{startedAt}, #{finishedAt}, #{updatedAt}
+        )
+    </insert>
+
+    <select id="findByAssistantMessageId" resultMap="toolExecutionRecordResultMap">
+        SELECT id, assistant_message_id, call_id, call_index, tool_name, arguments_json,
+               status, result_json, attempt_count, lease_token, lease_until, revision,
+               created_at, started_at, finished_at, updated_at
+        FROM tool_execution
+        WHERE assistant_message_id = #{assistantMessageId}
+        ORDER BY call_index ASC
+    </select>
+
+    <update id="claimPending">
+        UPDATE tool_execution
+        SET status = 'RUNNING',
+            attempt_count = attempt_count + 1,
+            lease_token = #{leaseToken},
+            lease_until = #{leaseUntil},
+            revision = revision + 1,
+            started_at = #{startedAt},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND revision = #{revision}
+          AND status = 'PENDING'
+    </update>
+
+    <update id="completeRunning">
+        UPDATE tool_execution
+        SET status = #{status},
+            result_json = #{resultJson},
+            lease_token = NULL,
+            lease_until = NULL,
+            revision = revision + 1,
+            finished_at = #{finishedAt},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND revision = #{revision}
+          AND status = 'RUNNING'
+          AND lease_token = #{leaseToken}
+          AND #{status} IN ('SUCCEEDED', 'FAILED', 'UNKNOWN')
+    </update>
+
+    <update id="markExpiredRunningAsUnknown">
+        UPDATE tool_execution
+        SET status = 'UNKNOWN',
+            result_json = #{resultJson},
+            lease_token = NULL,
+            lease_until = NULL,
+            revision = revision + 1,
+            finished_at = #{now},
+            updated_at = #{now}
+        WHERE status = 'RUNNING'
+          AND lease_until IS NOT NULL
+          AND lease_until &lt;= #{now}
+    </update>
+</mapper>

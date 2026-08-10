@@ -31,12 +31,12 @@ public interface SessionPersistenceMapper {
     SessionRecord findById(@Param("sessionId") String sessionId);
 
     /**
-     * 以乐观锁推进会话消息序号，并同步更新运行状态。
+     * 以乐观锁推进会话事件序号，并同步更新运行状态。
      *
      * @param sessionId           会话唯一标识
      * @param expectedVersion     调用方读取到的版本号
-     * @param expectedLastSeq     调用方读取到的最后消息序号
-     * @param newSeq              即将追加消息的序号
+     * @param expectedLastSequenceNo 调用方读取到的最后事件序号
+     * @param newSequenceNo          即将追加事件的序号
      * @param status              追加后的会话状态
      * @param updatedAt           更新时刻，UTC epoch milliseconds
      * @return 成功推进时返回 {@code 1}；返回 {@code 0} 表示发生并发写入、会话不存在或已归档
@@ -44,8 +44,8 @@ public interface SessionPersistenceMapper {
     int advanceForMessageAppend(
             @Param("sessionId") String sessionId,
             @Param("expectedVersion") long expectedVersion,
-            @Param("expectedLastSeq") long expectedLastSeq,
-            @Param("newSeq") long newSeq,
+            @Param("expectedLastSequenceNo") long expectedLastSequenceNo,
+            @Param("newSequenceNo") long newSequenceNo,
             @Param("status") SessionStatus status,
             @Param("updatedAt") long updatedAt
     );

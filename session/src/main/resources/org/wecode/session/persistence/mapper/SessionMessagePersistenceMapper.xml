@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper">
+
+    <resultMap id="sessionMessageRecordResultMap" type="org.wecode.session.persistence.entity.SessionMessageRecord">
+        <constructor>
+            <idArg column="id" javaType="java.lang.String"/>
+            <arg column="session_id" javaType="java.lang.String"/>
+            <arg column="sequence_no" javaType="_long"/>
+            <arg column="message_type" javaType="org.wecode.session.persistence.entity.SessionMessageType"/>
+            <arg column="payload_version" javaType="_int"/>
+            <arg column="payload_json" javaType="java.lang.String"/>
+            <arg column="compacts_through_sequence" javaType="java.lang.Long"/>
+            <arg column="created_at" javaType="_long"/>
+        </constructor>
+    </resultMap>
+
+    <insert id="insert" parameterType="org.wecode.session.persistence.entity.SessionMessageRecord">
+        INSERT INTO session_message (
+            id, session_id, sequence_no, message_type,
+            payload_version, payload_json, compacts_through_sequence, created_at
+        ) VALUES (
+            #{id}, #{sessionId}, #{sequenceNo}, #{messageType},
+            #{payloadVersion}, #{payloadJson}, #{compactsThroughSequence}, #{createdAt}
+        )
+    </insert>
+
+    <select id="findAllBySessionId" resultMap="sessionMessageRecordResultMap">
+        SELECT id, session_id, sequence_no, message_type,
+               payload_version, payload_json, compacts_through_sequence, created_at
+        FROM session_message
+        WHERE session_id = #{sessionId}
+        ORDER BY sequence_no ASC
+    </select>
+
+    <select id="findAfterSequenceExcludingCompaction" resultMap="sessionMessageRecordResultMap">
+        SELECT id, session_id, sequence_no, message_type,
+               payload_version, payload_json, compacts_through_sequence, created_at
+        FROM session_message
+        WHERE session_id = #{sessionId}
+          AND sequence_no > #{afterSequence}
+          AND message_type &lt;&gt; 'COMPACTION'
+        ORDER BY sequence_no ASC
+    </select>
+
+    <select id="findLatestCompaction" resultMap="sessionMessageRecordResultMap">
+        SELECT id, session_id, sequence_no, message_type,
+               payload_version, payload_json, compacts_through_sequence, created_at
+        FROM session_message
+        WHERE session_id = #{sessionId}
+          AND message_type = 'COMPACTION'
+        ORDER BY compacts_through_sequence DESC, sequence_no DESC
+        LIMIT 1
+    </select>
+</mapper>

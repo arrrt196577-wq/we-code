@@ -12,7 +12,7 @@ import java.util.Objects;
  * @param projectRootPath      {@code ProjectContext.projectRoot()} 对应的真实绝对路径
  * @param workingDirectoryPath {@code ProjectContext.workingDirectory()} 对应的最近工作目录
  * @param status               会话当前运行状态
- * @param lastSeq              已持久化的最后一条消息序号
+ * @param lastSequenceNo       已持久化的最后一个会话事件序号
  * @param version              乐观锁版本号
  * @param createdAt            创建时间，UTC epoch milliseconds
  * @param updatedAt            最后更新时间，UTC epoch milliseconds
@@ -23,7 +23,7 @@ public record SessionRecord(
         String projectRootPath,
         String workingDirectoryPath,
         SessionStatus status,
-        long lastSeq,
+        long lastSequenceNo,
         long version,
         long createdAt,
         long updatedAt,
@@ -41,8 +41,8 @@ public record SessionRecord(
         metadataJson = requireNonBlank(metadataJson, "metadataJson");
 
         // 消息序号不允许出现负数，否则无法维持会话内的追加顺序。
-        if (lastSeq < 0) {
-            throw new IllegalArgumentException("lastSeq must be >= 0");
+        if (lastSequenceNo < 0) {
+            throw new IllegalArgumentException("lastSequenceNo must be >= 0");
         }
         // 乐观锁版本号从零开始递增，负数没有业务语义。
         if (version < 0) {
