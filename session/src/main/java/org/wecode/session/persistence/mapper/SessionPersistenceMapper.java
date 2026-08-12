@@ -31,6 +31,14 @@ public interface SessionPersistenceMapper {
     SessionRecord findById(@Param("sessionId") String sessionId);
 
     /**
+     * 按最近更新时间倒序读取指定工作区的会话。
+     *
+     * @param workspaceId 工作区唯一标识
+     * @return 工作区内的会话列表；不存在时为空列表
+     */
+    List<SessionRecord> findByWorkspaceId(@Param("workspaceId") String workspaceId);
+
+    /**
      * 以乐观锁推进会话事件序号，并同步更新运行状态。
      *
      * @param sessionId           会话唯一标识

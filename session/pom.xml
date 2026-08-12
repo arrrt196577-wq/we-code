@@ -23,6 +23,11 @@
             <groupId>org.wecode</groupId>
             <artifactId>llm</artifactId>
         </dependency>
+        <!-- 会话 Payload 使用显式类型映射进行稳定 JSON 编解码。 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus</artifactId>

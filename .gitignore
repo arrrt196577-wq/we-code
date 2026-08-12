@@ -51,4 +51,6 @@ TOPSECRET
 *.class
 
 ### Docs ###
-docs/
+docs/*
+!docs/diagrams/
+!docs/diagrams/**

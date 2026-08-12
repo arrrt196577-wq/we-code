@@ -14,6 +14,7 @@
             <arg column="arguments_json" javaType="java.lang.String"/>
             <arg column="status" javaType="org.wecode.session.persistence.entity.ToolExecutionStatus"/>
             <arg column="result_json" javaType="java.lang.String"/>
+            <arg column="result_payload_version" javaType="java.lang.Integer"/>
             <arg column="attempt_count" javaType="_int"/>
             <arg column="lease_token" javaType="java.lang.String"/>
             <arg column="lease_until" javaType="java.lang.Long"/>
@@ -28,18 +29,18 @@
     <insert id="insert" parameterType="org.wecode.session.persistence.entity.ToolExecutionRecord">
         INSERT INTO tool_execution (
             id, assistant_message_id, call_id, call_index, tool_name, arguments_json,
-            status, result_json, attempt_count, lease_token, lease_until, revision,
+            status, result_json, result_payload_version, attempt_count, lease_token, lease_until, revision,
             created_at, started_at, finished_at, updated_at
         ) VALUES (
             #{id}, #{assistantMessageId}, #{callId}, #{callIndex}, #{toolName}, #{argumentsJson},
-            #{status}, #{resultJson}, #{attemptCount}, #{leaseToken}, #{leaseUntil}, #{revision},
+            #{status}, #{resultJson}, #{resultPayloadVersion}, #{attemptCount}, #{leaseToken}, #{leaseUntil}, #{revision},
             #{createdAt}, #{startedAt}, #{finishedAt}, #{updatedAt}
         )
     </insert>
 
     <select id="findByAssistantMessageId" resultMap="toolExecutionRecordResultMap">
         SELECT id, assistant_message_id, call_id, call_index, tool_name, arguments_json,
-               status, result_json, attempt_count, lease_token, lease_until, revision,
+               status, result_json, result_payload_version, attempt_count, lease_token, lease_until, revision,
                created_at, started_at, finished_at, updated_at
         FROM tool_execution
         WHERE assistant_message_id = #{assistantMessageId}
@@ -64,6 +65,7 @@
         UPDATE tool_execution
         SET status = #{status},
             result_json = #{resultJson},
+            result_payload_version = #{resultPayloadVersion},
             lease_token = NULL,
             lease_until = NULL,
             revision = revision + 1,
@@ -80,6 +82,7 @@
         UPDATE tool_execution
         SET status = 'UNKNOWN',
             result_json = #{resultJson},
+            result_payload_version = #{resultPayloadVersion},
             lease_token = NULL,
             lease_until = NULL,
             revision = revision + 1,

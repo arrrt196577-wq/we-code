@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.wecode.session.persistence.mapper.WorkspacePersistenceMapper">
+
+    <resultMap id="workspaceRecordResultMap" type="org.wecode.session.persistence.entity.WorkspaceRecord">
+        <constructor>
+            <idArg column="id" javaType="java.lang.String"/>
+            <arg column="root_path" javaType="java.lang.String"/>
+            <arg column="type" javaType="org.wecode.session.persistence.entity.WorkspaceType"/>
+            <arg column="trusted_at" javaType="_long"/>
+            <arg column="created_at" javaType="_long"/>
+            <arg column="metadata_json" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <insert id="insert" parameterType="org.wecode.session.persistence.entity.WorkspaceRecord">
+        INSERT INTO workspaces (
+            id, root_path, type, trusted_at, created_at, metadata_json
+        ) VALUES (
+            #{id}, #{rootPath}, #{type}, #{trustedAt}, #{createdAt}, #{metadataJson}
+        )
+    </insert>
+
+    <select id="findById" resultMap="workspaceRecordResultMap">
+        SELECT id, root_path, type, trusted_at, created_at, metadata_json
+        FROM workspaces
+        WHERE id = #{workspaceId}
+    </select>
+
+    <select id="findByRootPath" resultMap="workspaceRecordResultMap">
+        SELECT id, root_path, type, trusted_at, created_at, metadata_json
+        FROM workspaces
+        WHERE root_path = #{rootPath}
+    </select>
+</mapper>

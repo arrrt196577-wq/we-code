@@ -1,15 +1,37 @@
--- 会话根表：保存会话边界、运行状态和消息序号的并发控制信息。
-CREATE TABLE IF NOT EXISTS sessions (
-    id                     TEXT PRIMARY KEY,
-    project_root_path      TEXT NOT NULL,
-    working_directory_path TEXT NOT NULL,
-    status                 TEXT NOT NULL,
-    last_sequence_no       INTEGER NOT NULL DEFAULT 0,
-    version                INTEGER NOT NULL DEFAULT 0,
-    created_at             INTEGER NOT NULL,
-    updated_at             INTEGER NOT NULL,
-    metadata_json          TEXT NOT NULL,
+-- baseline V1：工作区、会话历史和工具执行的初始完整结构。
+-- 工作区表：保存经过用户确认的、不可变的工具访问边界。
+CREATE TABLE IF NOT EXISTS workspaces (
+    id            TEXT PRIMARY KEY,
+    root_path     TEXT NOT NULL UNIQUE,
+    type          TEXT NOT NULL,
+    trusted_at    INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL,
 
+    CHECK (id <> ''),
+    CHECK (root_path <> ''),
+    CHECK (type IN ('GIT_REPOSITORY', 'LOCAL_DIRECTORY')),
+    CHECK (trusted_at >= 0),
+    CHECK (created_at >= 0),
+    CHECK (trusted_at >= created_at),
+    CHECK (json_valid(metadata_json))
+);
+
+-- 会话根表：关联固定工作区和工作目录，并保存运行状态与消息序号。
+CREATE TABLE IF NOT EXISTS sessions (
+    id                              TEXT PRIMARY KEY,
+    workspace_id                    TEXT NOT NULL,
+    working_directory_relative_path TEXT NOT NULL,
+    status                          TEXT NOT NULL,
+    last_sequence_no                INTEGER NOT NULL DEFAULT 0,
+    version                         INTEGER NOT NULL DEFAULT 0,
+    created_at                      INTEGER NOT NULL,
+    updated_at                      INTEGER NOT NULL,
+    metadata_json                   TEXT NOT NULL,
+
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
+    CHECK (id <> ''),
+    CHECK (working_directory_relative_path <> ''),
     CHECK (status IN ('IDLE', 'RUNNING', 'INTERRUPTED', 'ARCHIVED')),
     CHECK (last_sequence_no >= 0),
     CHECK (version >= 0),
@@ -17,6 +39,25 @@ CREATE TABLE IF NOT EXISTS sessions (
     CHECK (updated_at >= created_at),
     CHECK (json_valid(metadata_json))
 );
+
+-- 工作区根目录是用户确认过的安全边界，创建后不允许原地修改。
+CREATE TRIGGER IF NOT EXISTS trg_workspace_root_path_immutable
+BEFORE UPDATE OF root_path ON workspaces
+FOR EACH ROW
+WHEN NEW.root_path <> OLD.root_path
+BEGIN
+    SELECT RAISE(ABORT, 'workspace root_path is immutable');
+END;
+
+-- 会话工作目录属于会话身份；需要其他目录时必须创建新会话。
+CREATE TRIGGER IF NOT EXISTS trg_session_workspace_context_immutable
+BEFORE UPDATE OF workspace_id, working_directory_relative_path ON sessions
+FOR EACH ROW
+WHEN NEW.workspace_id <> OLD.workspace_id
+  OR NEW.working_directory_relative_path <> OLD.working_directory_relative_path
+BEGIN
+    SELECT RAISE(ABORT, 'session workspace context is immutable');
+END;
 
 -- 会话历史事件表：system、user、assistant 与 compaction 均只追加、不原地修改。
 CREATE TABLE IF NOT EXISTS session_message (
@@ -61,6 +102,7 @@ CREATE TABLE IF NOT EXISTS tool_execution (
     arguments_json         TEXT NOT NULL,
     status                 TEXT NOT NULL,
     result_json            TEXT,
+    result_payload_version INTEGER,
     attempt_count          INTEGER NOT NULL DEFAULT 0,
     lease_token            TEXT,
     lease_until            INTEGER,
@@ -80,6 +122,11 @@ CREATE TABLE IF NOT EXISTS tool_execution (
     CHECK (json_valid(arguments_json)),
     CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'UNKNOWN', 'CANCELLED')),
     CHECK (result_json IS NULL OR json_valid(result_json)),
+    CHECK (
+        (result_json IS NULL AND result_payload_version IS NULL)
+        OR
+        (result_json IS NOT NULL AND result_payload_version IS NOT NULL AND result_payload_version > 0)
+    ),
     CHECK (attempt_count >= 0),
     CHECK (revision >= 0),
     CHECK (created_at >= 0),
@@ -105,6 +152,10 @@ END;
 -- 启动恢复时按状态扫描会话。
 CREATE INDEX IF NOT EXISTS idx_sessions_status_updated_at
     ON sessions (status, updated_at);
+
+-- 从当前工作区进入时按最近使用时间选择或列出会话。
+CREATE INDEX IF NOT EXISTS idx_sessions_workspace_updated_at
+    ON sessions (workspace_id, updated_at DESC);
 
 -- 组装 Prompt 时按会话顺序读取历史，并快速定位最新压缩节点。
 CREATE INDEX IF NOT EXISTS idx_session_message_session_type_compaction

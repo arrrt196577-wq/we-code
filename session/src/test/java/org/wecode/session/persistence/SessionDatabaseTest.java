@@ -10,9 +10,19 @@ import org.wecode.session.persistence.entity.SessionRecord;
 import org.wecode.session.persistence.entity.SessionStatus;
 import org.wecode.session.persistence.entity.ToolExecutionRecord;
 import org.wecode.session.persistence.entity.ToolExecutionStatus;
+import org.wecode.session.persistence.entity.WorkspaceRecord;
+import org.wecode.session.persistence.entity.WorkspaceType;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.ToolExecutionPersistenceMapper;
+import org.wecode.session.persistence.mapper.WorkspacePersistenceMapper;
+import org.wecode.session.persistence.payload.AssistantFinishReason;
+import org.wecode.session.persistence.payload.AssistantPayload;
+import org.wecode.session.persistence.payload.CompactionPayload;
+import org.wecode.session.persistence.payload.SessionPayloadCodec;
+import org.wecode.session.persistence.payload.SystemPayload;
+import org.wecode.session.persistence.payload.ToolExecutionResultPayload;
+import org.wecode.session.persistence.payload.UserPayload;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 验证三张会话基线表的初始化、Mapper 注册和 SQLite 外键约束。
+ * 验证工作区与会话基线表的初始化、Mapper 注册和 SQLite 约束。
  */
 class SessionDatabaseTest {
 
@@ -47,15 +57,19 @@ class SessionDatabaseTest {
         assertTrue(Files.isRegularFile(database.databasePath()));
         try (SqlSession sqlSession = database.openSession()) {
             // 通过实际执行查询验证 XML Mapper 已被 MyBatis 加载。
+            WorkspacePersistenceMapper workspaceMapper = sqlSession.getMapper(WorkspacePersistenceMapper.class);
             SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
             SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
             ToolExecutionPersistenceMapper toolExecutionMapper = sqlSession.getMapper(ToolExecutionPersistenceMapper.class);
+            assertNotNull(workspaceMapper);
             assertNotNull(sessionMapper);
             assertNotNull(messageMapper);
             assertNotNull(toolExecutionMapper);
+            assertNull(workspaceMapper.findById("missing-workspace"));
             assertNull(sessionMapper.findById("missing-session"));
             assertTrue(messageMapper.findAllBySessionId("missing-session").isEmpty());
             assertEquals(1, tableExists(sqlSession, "flyway_schema_history"));
+            assertEquals(1, tableExists(sqlSession, "workspaces"));
             assertEquals(1, tableExists(sqlSession, "sessions"));
             assertEquals(1, tableExists(sqlSession, "session_message"));
             assertEquals(1, tableExists(sqlSession, "tool_execution"));
@@ -78,22 +92,47 @@ class SessionDatabaseTest {
     }
 
     /**
-     * 验证三张基线表的 Mapper 可以写入、读取压缩节点，并完成一次工具领取和结果写回。
+     * 验证四张基线表的 Mapper 可以写入、读取压缩节点，并完成一次工具领取和结果写回。
      */
     @Test
     void mappersPersistConversationCompactionAndToolExecution() {
         SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
         long createdAt = 1_000L;
+        SessionPayloadCodec payloadCodec = new SessionPayloadCodec();
+        SessionPayloadCodec.EncodedPayload systemPayload = payloadCodec.encodeMessage(
+                new SystemPayload("system", "v1")
+        );
+        SessionPayloadCodec.EncodedPayload userPayload = payloadCodec.encodeMessage(new UserPayload("task"));
+        SessionPayloadCodec.EncodedPayload compactionPayload = payloadCodec.encodeMessage(
+                new CompactionPayload("memory", "v1")
+        );
+        SessionPayloadCodec.EncodedPayload assistantPayload = payloadCodec.encodeMessage(
+                new AssistantPayload(null, null, AssistantFinishReason.TOOL_CALLS)
+        );
+        SessionPayloadCodec.EncodedPayload toolResultPayload = payloadCodec.encodeToolResult(
+                new ToolExecutionResultPayload("ok")
+        );
 
         try (SqlSession sqlSession = database.openSession()) {
+            WorkspacePersistenceMapper workspaceMapper = sqlSession.getMapper(WorkspacePersistenceMapper.class);
             SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
             SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
             ToolExecutionPersistenceMapper toolMapper = sqlSession.getMapper(ToolExecutionPersistenceMapper.class);
 
+            WorkspaceRecord workspace = new WorkspaceRecord(
+                    "workspace-1",
+                    temporaryDirectory.resolve("project").toAbsolutePath().normalize().toString(),
+                    WorkspaceType.LOCAL_DIRECTORY,
+                    createdAt,
+                    createdAt,
+                    "{\"formatVersion\":1}"
+            );
+            assertEquals(1, workspaceMapper.insert(workspace));
+
             SessionRecord session = new SessionRecord(
                     "session-1",
-                    "E:/workspace/project",
-                    "E:/workspace/project",
+                    "workspace-1",
+                    ".",
                     SessionStatus.RUNNING,
                     0,
                     0,
@@ -111,7 +150,7 @@ class SessionDatabaseTest {
                     0,
                     new SessionMessageRecord(
                             "message-system", "session-1", 1, SessionMessageType.SYSTEM,
-                            1, "{\"content\":\"system\",\"promptVersion\":\"v1\"}", null, createdAt + 1
+                            systemPayload.payloadVersion(), systemPayload.payloadJson(), null, createdAt + 1
                     )
             );
             appendMessage(
@@ -122,13 +161,13 @@ class SessionDatabaseTest {
                     1,
                     new SessionMessageRecord(
                             "message-user", "session-1", 2, SessionMessageType.USER,
-                            1, "{\"content\":\"task\"}", null, createdAt + 2
+                            userPayload.payloadVersion(), userPayload.payloadJson(), null, createdAt + 2
                     )
             );
             // 父消息存在但不是 ASSISTANT 时，触发器仍必须拒绝创建工具调用。
             assertThrows(PersistenceException.class, () -> toolMapper.insert(new ToolExecutionRecord(
                     "invalid-tool-execution", "message-user", "invalid-call", 0, "Read", "{}",
-                    ToolExecutionStatus.PENDING, null, 0, null, null, 0,
+                    ToolExecutionStatus.PENDING, null, null, 0, null, null, 0,
                     createdAt + 2, null, null, createdAt + 2
             )));
             appendMessage(
@@ -139,7 +178,7 @@ class SessionDatabaseTest {
                     2,
                     new SessionMessageRecord(
                             "message-compaction", "session-1", 3, SessionMessageType.COMPACTION,
-                            1, "{\"renderedMemory\":\"memory\"}", 2L, createdAt + 3
+                            compactionPayload.payloadVersion(), compactionPayload.payloadJson(), 2L, createdAt + 3
                     )
             );
             appendMessage(
@@ -150,13 +189,13 @@ class SessionDatabaseTest {
                     3,
                     new SessionMessageRecord(
                             "message-assistant", "session-1", 4, SessionMessageType.ASSISTANT,
-                            1, "{\"content\":null,\"finishReason\":\"tool_calls\"}", null, createdAt + 4
+                            assistantPayload.payloadVersion(), assistantPayload.payloadJson(), null, createdAt + 4
                     )
             );
 
             ToolExecutionRecord pendingExecution = new ToolExecutionRecord(
                     "tool-execution-1", "message-assistant", "call-1", 0, "Read", "{\"path\":\"pom.xml\"}",
-                    ToolExecutionStatus.PENDING, null, 0, null, null, 0,
+                    ToolExecutionStatus.PENDING, null, null, 0, null, null, 0,
                     createdAt + 4, null, null, createdAt + 4
             );
             assertEquals(1, toolMapper.insert(pendingExecution));
@@ -165,18 +204,29 @@ class SessionDatabaseTest {
             ));
             assertEquals(1, toolMapper.completeRunning(
                     "tool-execution-1", 1, "lease-1", ToolExecutionStatus.SUCCEEDED,
-                    "{\"content\":\"ok\",\"isError\":false}", createdAt + 6, createdAt + 6
+                    toolResultPayload.payloadJson(), toolResultPayload.payloadVersion(),
+                    createdAt + 6, createdAt + 6
             ));
             sqlSession.commit();
         }
 
         try (SqlSession sqlSession = database.openSession()) {
+            WorkspacePersistenceMapper workspaceMapper = sqlSession.getMapper(WorkspacePersistenceMapper.class);
             SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
             SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
             ToolExecutionPersistenceMapper toolMapper = sqlSession.getMapper(ToolExecutionPersistenceMapper.class);
 
+            WorkspaceRecord workspace = workspaceMapper.findByRootPath(
+                    temporaryDirectory.resolve("project").toAbsolutePath().normalize().toString()
+            );
+            assertNotNull(workspace);
+            assertEquals("workspace-1", workspace.id());
+
             SessionRecord session = sessionMapper.findById("session-1");
             assertNotNull(session);
+            assertEquals("workspace-1", session.workspaceId());
+            assertEquals(".", session.workingDirectoryRelativePath());
+            assertEquals(1, sessionMapper.findByWorkspaceId("workspace-1").size());
             assertEquals(4, session.lastSequenceNo());
             assertEquals(4, session.version());
             assertEquals("message-compaction", messageMapper.findLatestCompaction("session-1").id());
@@ -184,9 +234,80 @@ class SessionDatabaseTest {
 
             ToolExecutionRecord completedExecution = toolMapper.findByAssistantMessageId("message-assistant").getFirst();
             assertEquals(ToolExecutionStatus.SUCCEEDED, completedExecution.status());
+            assertEquals(toolResultPayload.payloadVersion(), completedExecution.resultPayloadVersion());
+            assertEquals(
+                    new ToolExecutionResultPayload("ok"),
+                    payloadCodec.decodeToolResult(
+                            completedExecution.resultPayloadVersion(),
+                            completedExecution.resultJson()
+                    )
+            );
             assertEquals(1, completedExecution.attemptCount());
             assertEquals(2, completedExecution.revision());
         }
+    }
+
+    /**
+     * 验证工作区根路径和会话工作目录在创建后不能被 SQL 绕过修改。
+     */
+    @Test
+    void workspaceAndSessionPathsAreImmutable() throws Exception {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        long createdAt = 1_000L;
+
+        try (SqlSession sqlSession = database.openSession()) {
+            WorkspacePersistenceMapper workspaceMapper = sqlSession.getMapper(WorkspacePersistenceMapper.class);
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            assertEquals(1, workspaceMapper.insert(new WorkspaceRecord(
+                    "workspace-1",
+                    temporaryDirectory.resolve("project").toAbsolutePath().normalize().toString(),
+                    WorkspaceType.LOCAL_DIRECTORY,
+                    createdAt,
+                    createdAt,
+                    "{\"formatVersion\":1}"
+            )));
+            assertEquals(1, sessionMapper.insert(new SessionRecord(
+                    "session-1", "workspace-1", ".", SessionStatus.IDLE,
+                    0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
+            )));
+            sqlSession.commit();
+
+            // 数据库触发器必须阻止修改已确认的工作区安全边界。
+            assertThrows(SQLException.class, () -> executeUpdate(
+                    sqlSession,
+                    "UPDATE workspaces SET root_path = ? WHERE id = ?",
+                    temporaryDirectory.resolve("other-project").toAbsolutePath().normalize().toString(),
+                    "workspace-1"
+            ));
+            // 数据库触发器必须阻止修改会话创建时绑定的固定工作目录。
+            assertThrows(SQLException.class, () -> executeUpdate(
+                    sqlSession,
+                    "UPDATE sessions SET working_directory_relative_path = ? WHERE id = ?",
+                    "module-a",
+                    "session-1"
+            ));
+        }
+    }
+
+    /**
+     * 验证会话只接受规范化且不会越过工作区边界的相对工作目录。
+     */
+    @Test
+    void sessionRejectsUnsafeWorkingDirectoryPaths() {
+        long createdAt = 1_000L;
+
+        assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
+                "absolute", "workspace-1", temporaryDirectory.toAbsolutePath().toString(), SessionStatus.IDLE,
+                0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
+                "escaping", "workspace-1", "../outside", SessionStatus.IDLE,
+                0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
+                "unnormalized", "workspace-1", "module/../other", SessionStatus.IDLE,
+                0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
+        ));
     }
 
     /**
@@ -226,6 +347,26 @@ class SessionDatabaseTest {
      */
     private static void assertForeignKeyViolation(SqlSession sqlSession) throws SQLException {
         try (PreparedStatement statement = sqlSession.getConnection().prepareStatement("""
+                INSERT INTO sessions (
+                    id, workspace_id, working_directory_relative_path, status,
+                    last_sequence_no, version, created_at, updated_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """)) {
+            statement.setString(1, "orphan-session");
+            statement.setString(2, "missing-workspace");
+            statement.setString(3, ".");
+            statement.setString(4, "IDLE");
+            statement.setLong(5, 0);
+            statement.setLong(6, 0);
+            statement.setLong(7, 0);
+            statement.setLong(8, 0);
+            statement.setString(9, "{\"formatVersion\":1}");
+
+            // workspace 外键不存在时必须拒绝创建孤立会话。
+            assertThrows(SQLException.class, statement::executeUpdate);
+        }
+
+        try (PreparedStatement statement = sqlSession.getConnection().prepareStatement("""
                 INSERT INTO session_message (
                     id, session_id, sequence_no, message_type,
                     payload_version, payload_json, compacts_through_sequence, created_at
@@ -247,9 +388,9 @@ class SessionDatabaseTest {
         try (PreparedStatement statement = sqlSession.getConnection().prepareStatement("""
                 INSERT INTO tool_execution (
                     id, assistant_message_id, call_id, call_index, tool_name, arguments_json,
-                    status, result_json, attempt_count, lease_token, lease_until, revision,
+                    status, result_json, result_payload_version, attempt_count, lease_token, lease_until, revision,
                     created_at, started_at, finished_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             statement.setString(1, "missing-session");
             statement.setString(2, "missing-assistant");
@@ -259,14 +400,15 @@ class SessionDatabaseTest {
             statement.setString(6, "{}");
             statement.setString(7, "PENDING");
             statement.setNull(8, java.sql.Types.VARCHAR);
-            statement.setInt(9, 0);
-            statement.setNull(10, java.sql.Types.VARCHAR);
-            statement.setNull(11, java.sql.Types.INTEGER);
-            statement.setLong(12, 0);
+            statement.setNull(9, java.sql.Types.INTEGER);
+            statement.setInt(10, 0);
+            statement.setNull(11, java.sql.Types.VARCHAR);
+            statement.setNull(12, java.sql.Types.INTEGER);
             statement.setLong(13, 0);
-            statement.setNull(14, java.sql.Types.INTEGER);
+            statement.setLong(14, 0);
             statement.setNull(15, java.sql.Types.INTEGER);
-            statement.setLong(16, 0);
+            statement.setNull(16, java.sql.Types.INTEGER);
+            statement.setLong(17, 0);
 
             // assistant 外键不存在时同样必须拒绝写入孤儿工具调用。
             assertThrows(SQLException.class, statement::executeUpdate);
@@ -290,6 +432,27 @@ class SessionDatabaseTest {
                 resultSet.next();
                 return resultSet.getInt(1);
             }
+        }
+    }
+
+    /**
+     * 使用预编译语句执行双参数更新，供数据库触发器测试复用。
+     *
+     * @param sqlSession 数据库会话
+     * @param sql        含两个占位符的更新语句
+     * @param first      第一个参数
+     * @param second     第二个参数
+     */
+    private static void executeUpdate(
+            SqlSession sqlSession,
+            String sql,
+            String first,
+            String second
+    ) throws SQLException {
+        try (PreparedStatement statement = sqlSession.getConnection().prepareStatement(sql)) {
+            statement.setString(1, first);
+            statement.setString(2, second);
+            statement.executeUpdate();
         }
     }
 }

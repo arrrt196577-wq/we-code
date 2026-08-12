@@ -1,16 +1,17 @@
 package org.wecode.session.persistence.entity;
 
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.Objects;
 
 /**
  * {@code sessions} 表的一行持久化数据。
  * <p>
- * 项目根目录是会话不可变的工具访问边界；工作目录记录最近一次运行上下文，
- * 在同一项目根目录内恢复会话时允许更新。
+ * 工作区和工作目录共同构成会话不可变的执行上下文。
  *
  * @param id                   会话唯一标识，由应用层生成
- * @param projectRootPath      {@code ProjectContext.projectRoot()} 对应的真实绝对路径
- * @param workingDirectoryPath {@code ProjectContext.workingDirectory()} 对应的最近工作目录
+ * @param workspaceId                    所属工作区标识
+ * @param workingDirectoryRelativePath   相对于工作区根目录的固定工作目录，根目录用 {@code .} 表示
  * @param status               会话当前运行状态
  * @param lastSequenceNo       已持久化的最后一个会话事件序号
  * @param version              乐观锁版本号
@@ -20,8 +21,8 @@ import java.util.Objects;
  */
 public record SessionRecord(
         String id,
-        String projectRootPath,
-        String workingDirectoryPath,
+        String workspaceId,
+        String workingDirectoryRelativePath,
         SessionStatus status,
         long lastSequenceNo,
         long version,
@@ -35,8 +36,12 @@ public record SessionRecord(
      */
     public SessionRecord {
         id = requireNonBlank(id, "id");
-        projectRootPath = requireNonBlank(projectRootPath, "projectRootPath");
-        workingDirectoryPath = requireNonBlank(workingDirectoryPath, "workingDirectoryPath");
+        workspaceId = requireNonBlank(workspaceId, "workspaceId");
+        workingDirectoryRelativePath = requireNonBlank(
+                workingDirectoryRelativePath,
+                "workingDirectoryRelativePath"
+        );
+        workingDirectoryRelativePath = requireNormalizedRelativePath(workingDirectoryRelativePath);
         status = Objects.requireNonNull(status, "status");
         metadataJson = requireNonBlank(metadataJson, "metadataJson");
 
@@ -72,5 +77,43 @@ public record SessionRecord(
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return value;
+    }
+
+    /**
+     * 校验会话工作目录必须是规范化的相对路径，防止恢复时越过工作区边界。
+     *
+     * @param value 待校验的相对路径文本
+     * @return 已校验且统一使用正斜杠的相对路径；工作区根目录返回 {@code .}
+     */
+    private static String requireNormalizedRelativePath(String value) {
+        try {
+            Path path = Path.of(value);
+            // 绝对路径会绕过 workspace 根目录拼接，不能作为会话工作目录保存。
+            if (path.isAbsolute()) {
+                throw new IllegalArgumentException("workingDirectoryRelativePath must be relative: " + value);
+            }
+
+            Path normalized = path.normalize();
+            String normalizedValue = normalized.toString().replace('\\', '/');
+            // 空相对路径没有稳定的持久化表示，统一使用点表示工作区根目录。
+            if (normalizedValue.isBlank()) {
+                normalizedValue = ".";
+            }
+            // 规范化后仍以父目录开头，代表工作目录落在 workspace 边界之外。
+            if (normalizedValue.equals("..") || normalizedValue.startsWith("../")) {
+                throw new IllegalArgumentException(
+                        "workingDirectoryRelativePath must stay inside workspace: " + value
+                );
+            }
+            // 只存规范形式，避免同一目录出现多个数据库身份。
+            if (!normalizedValue.equals(value.replace('\\', '/'))) {
+                throw new IllegalArgumentException(
+                        "workingDirectoryRelativePath must be normalized: " + value
+                );
+            }
+            return normalizedValue;
+        } catch (InvalidPathException exception) {
+            throw new IllegalArgumentException("workingDirectoryRelativePath is invalid: " + value, exception);
+        }
     }
 }

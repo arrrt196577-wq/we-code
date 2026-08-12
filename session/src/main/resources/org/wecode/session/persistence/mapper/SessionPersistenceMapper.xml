@@ -7,8 +7,8 @@
     <resultMap id="sessionRecordResultMap" type="org.wecode.session.persistence.entity.SessionRecord">
         <constructor>
             <idArg column="id" javaType="java.lang.String"/>
-            <arg column="project_root_path" javaType="java.lang.String"/>
-            <arg column="working_directory_path" javaType="java.lang.String"/>
+            <arg column="workspace_id" javaType="java.lang.String"/>
+            <arg column="working_directory_relative_path" javaType="java.lang.String"/>
             <arg column="status" javaType="org.wecode.session.persistence.entity.SessionStatus"/>
             <arg column="last_sequence_no" javaType="_long"/>
             <arg column="version" javaType="_long"/>
@@ -20,19 +20,27 @@
 
     <insert id="insert" parameterType="org.wecode.session.persistence.entity.SessionRecord">
         INSERT INTO sessions (
-            id, project_root_path, working_directory_path,
+            id, workspace_id, working_directory_relative_path,
             status, last_sequence_no, version, created_at, updated_at, metadata_json
         ) VALUES (
-            #{id}, #{projectRootPath}, #{workingDirectoryPath},
+            #{id}, #{workspaceId}, #{workingDirectoryRelativePath},
             #{status}, #{lastSequenceNo}, #{version}, #{createdAt}, #{updatedAt}, #{metadataJson}
         )
     </insert>
 
     <select id="findById" resultMap="sessionRecordResultMap">
-        SELECT id, project_root_path, working_directory_path,
+        SELECT id, workspace_id, working_directory_relative_path,
                status, last_sequence_no, version, created_at, updated_at, metadata_json
         FROM sessions
         WHERE id = #{sessionId}
+    </select>
+
+    <select id="findByWorkspaceId" resultMap="sessionRecordResultMap">
+        SELECT id, workspace_id, working_directory_relative_path,
+               status, last_sequence_no, version, created_at, updated_at, metadata_json
+        FROM sessions
+        WHERE workspace_id = #{workspaceId}
+        ORDER BY updated_at DESC, id DESC
     </select>
 
     <!--
@@ -51,7 +59,7 @@
     </update>
 
     <select id="findRecoverable" resultMap="sessionRecordResultMap">
-        SELECT id, project_root_path, working_directory_path,
+        SELECT id, workspace_id, working_directory_relative_path,
                status, last_sequence_no, version, created_at, updated_at, metadata_json
         FROM sessions
         WHERE status IN ('RUNNING', 'INTERRUPTED')

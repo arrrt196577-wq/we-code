@@ -13,6 +13,7 @@ import java.util.Objects;
  * @param argumentsJson      工具原始参数 JSON
  * @param status             执行状态
  * @param resultJson         成功结果或失败详情 JSON，可为空
+ * @param resultPayloadVersion 工具结果 JSON 的结构版本；无结果时必须为空
  * @param attemptCount       已执行尝试次数
  * @param leaseToken         当前执行租约令牌，可为空
  * @param leaseUntil         当前租约到期时间，可为空
@@ -31,6 +32,7 @@ public record ToolExecutionRecord(
         String argumentsJson,
         ToolExecutionStatus status,
         String resultJson,
+        Integer resultPayloadVersion,
         int attemptCount,
         String leaseToken,
         Long leaseUntil,
@@ -52,6 +54,14 @@ public record ToolExecutionRecord(
         argumentsJson = requireNonBlank(argumentsJson, "argumentsJson");
         status = Objects.requireNonNull(status, "status");
 
+        // 工具结果 JSON 与结构版本必须作为一个整体出现，避免恢复时猜测版本。
+        if ((resultJson == null) != (resultPayloadVersion == null)) {
+            throw new IllegalArgumentException("resultJson and resultPayloadVersion must both be null or non-null");
+        }
+        // 已持久化结果的版本从 1 开始递增。
+        if (resultPayloadVersion != null && resultPayloadVersion <= 0) {
+            throw new IllegalArgumentException("resultPayloadVersion must be > 0");
+        }
         // 同轮调用从零开始按模型原始顺序编号，用于稳定重建 Prompt。
         if (callIndex < 0) {
             throw new IllegalArgumentException("callIndex must be >= 0");

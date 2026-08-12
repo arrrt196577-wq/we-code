@@ -11,6 +11,7 @@ import org.sqlite.SQLiteDataSource;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.ToolExecutionPersistenceMapper;
+import org.wecode.session.persistence.mapper.WorkspacePersistenceMapper;
 
 import javax.sql.DataSource;
 import java.nio.file.Path;
@@ -72,6 +73,7 @@ final class SessionPersistenceConfiguration {
                 Objects.requireNonNull(dataSource, "dataSource")
         );
         Configuration configuration = new Configuration(environment);
+        configuration.addMapper(WorkspacePersistenceMapper.class);
         configuration.addMapper(SessionPersistenceMapper.class);
         configuration.addMapper(SessionMessagePersistenceMapper.class);
         configuration.addMapper(ToolExecutionPersistenceMapper.class);

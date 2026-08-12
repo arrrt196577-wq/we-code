@@ -57,6 +57,7 @@ public interface ToolExecutionPersistenceMapper {
      * @param leaseToken 当前执行租约令牌
      * @param status     仅允许 {@code SUCCEEDED}、{@code FAILED} 或 {@code UNKNOWN}
      * @param resultJson 工具结果或错误详情 JSON
+     * @param resultPayloadVersion 工具结果 JSON 的结构版本
      * @param finishedAt 终态写入时刻
      * @param updatedAt  最后更新时间
      * @return 成功更新时返回 1；否则返回 0
@@ -67,6 +68,7 @@ public interface ToolExecutionPersistenceMapper {
             @Param("leaseToken") String leaseToken,
             @Param("status") ToolExecutionStatus status,
             @Param("resultJson") String resultJson,
+            @Param("resultPayloadVersion") int resultPayloadVersion,
             @Param("finishedAt") long finishedAt,
             @Param("updatedAt") long updatedAt
     );
@@ -76,7 +78,12 @@ public interface ToolExecutionPersistenceMapper {
      *
      * @param now        当前时间
      * @param resultJson 用于恢复诊断的 JSON 详情
+     * @param resultPayloadVersion 恢复诊断 JSON 的结构版本
      * @return 被标记的记录数量
      */
-    int markExpiredRunningAsUnknown(@Param("now") long now, @Param("resultJson") String resultJson);
+    int markExpiredRunningAsUnknown(
+            @Param("now") long now,
+            @Param("resultJson") String resultJson,
+            @Param("resultPayloadVersion") int resultPayloadVersion
+    );
 }
