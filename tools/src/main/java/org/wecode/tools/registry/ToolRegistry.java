@@ -67,7 +67,7 @@ public final class ToolRegistry {
      * @param toolCallId    本次调用 id
      * @param name          工具名
      * @param argumentsJson 参数 JSON
-     * @param context       执行上下文（含项目根目录）
+     * @param context       执行上下文（含工作区路径）
      * @return 成功或失败 observation；未知工具也返回 failed
      */
     public ToolResult execute(

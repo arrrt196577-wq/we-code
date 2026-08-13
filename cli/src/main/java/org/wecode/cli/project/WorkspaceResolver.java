@@ -8,11 +8,12 @@ import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 根据 CLI 启动目录识别当前项目。
+ * 根据 CLI 启动目录识别当前工作区。
  * <p>
- * 若目录位于 Git 仓库中，则使用 Git worktree 根目录作为项目根目录；否则将启动目录本身视为本地项目。
+ * 工作区路径始终是用户执行 {@code wecode} 时的真实目录；Git 探测只标记目录类型，
+ * 不会将路径提升到 Git worktree 根目录。
  */
-public final class ProjectResolver {
+public final class WorkspaceResolver {
 
     /** Git 命令的最长等待时间，避免 Git 配置异常时阻塞 CLI 启动。 */
     private static final long GIT_TIMEOUT_SECONDS = 5;
@@ -23,27 +24,14 @@ public final class ProjectResolver {
      * @param launchDirectory 用户执行 {@code wecode} 时的当前工作目录
      * @return 已解析的项目上下文
      */
-    public ProjectContext resolve(Path launchDirectory) {
-        Path realLaunchDirectory = requireExistingDirectory(launchDirectory, "launchDirectory");
-        Path gitRoot = discoverGitRoot(realLaunchDirectory);
+    public WorkspaceContext resolve(Path launchDirectory) {
+        Path workspacePath = requireExistingDirectory(launchDirectory, "launchDirectory");
+        ProjectType type = isInsideGitRepository(workspacePath)
+                ? ProjectType.GIT_REPOSITORY
+                : ProjectType.LOCAL_DIRECTORY;
 
-        // Git 仓库优先使用 worktree 根目录，确保同一仓库的子目录共享项目身份与文件边界。
-        if (gitRoot != null) {
-            return new ProjectContext(
-                    realLaunchDirectory,
-                    gitRoot,
-                    realLaunchDirectory,
-                    ProjectType.GIT_REPOSITORY
-            );
-        }
-
-        // 非 Git 目录不应阻止用户使用 Agent，当前目录本身就是最小且安全的项目边界。
-        return new ProjectContext(
-                realLaunchDirectory,
-                realLaunchDirectory,
-                realLaunchDirectory,
-                ProjectType.LOCAL_DIRECTORY
-        );
+        // 当前阶段不赋予路径其他含义：执行命令的真实目录就是唯一工作区路径。
+        return new WorkspaceContext(workspacePath, type);
     }
 
     /**
@@ -68,46 +56,43 @@ public final class ProjectResolver {
     }
 
     /**
-     * 使用 Git 发现包含指定目录的最近 worktree 根目录。
+     * 使用 Git 判断指定工作区目录是否位于仓库中。
      *
-     * @param launchDirectory 已校验的真实启动目录
-     * @return Git 根目录；Git 不存在、当前目录不在仓库内或探测失败时返回 {@code null}
+     * @param workspacePath 已校验的真实工作区目录
+     * @return 当前目录位于 Git worktree 中时返回 {@code true}
      */
-    private static Path discoverGitRoot(Path launchDirectory) {
+    private static boolean isInsideGitRepository(Path workspacePath) {
         Process process;
         try {
             process = new ProcessBuilder(
                     "git",
                     "-C",
-                    launchDirectory.toString(),
+                    workspacePath.toString(),
                     "rev-parse",
-                    "--show-toplevel"
+                    "--is-inside-work-tree"
             ).redirectErrorStream(true).start();
         } catch (IOException e) {
             // 未安装 Git 或无法启动 Git 时，降级为普通本地目录，保证基础 CLI 仍可使用。
-            return null;
+            return false;
         }
 
         try {
-            // Git 项目发现只应是短命令；超时后销毁进程并按非 Git 目录处理。
+            // Git 类型探测只应是短命令；超时后销毁进程并按普通目录处理。
             if (!process.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return null;
+                return false;
             }
 
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
-            // 非零退出码代表当前目录不在 Git 仓库中，或 Git 无法解析该目录。
-            if (process.exitValue() != 0 || output.isBlank()) {
-                return null;
-            }
-            return requireExistingDirectory(Path.of(output), "git project root");
+            // 只读取 Git 返回的布尔结果，绝不使用 Git 输出派生工作区路径。
+            return process.exitValue() == 0 && "true".equalsIgnoreCase(output);
         } catch (InterruptedException e) {
             // 中断必须恢复，避免上层任务取消信号被吞掉。
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while discovering Git project root", e);
-        } catch (IOException | IllegalArgumentException e) {
-            // Git 输出不是可用目录时，按本地目录降级，避免启动流程被外部工具异常阻断。
-            return null;
+            throw new IllegalStateException("Interrupted while detecting Git workspace type", e);
+        } catch (IOException e) {
+            // 无法读取 Git 输出时按普通目录降级，避免外部工具异常阻断启动。
+            return false;
         }
     }
 }

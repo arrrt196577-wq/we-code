@@ -51,7 +51,36 @@
     </dependencies>
 
     <build>
+        <!-- 统一产物名，便于安装脚本将 target/wecode.jar 复制到全局命令目录。 -->
+        <finalName>wecode</finalName>
         <plugins>
+            <!-- 将 CLI、本项目模块及全部运行时依赖合并为可独立运行的 Jar。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <!-- 使用合并后的 Jar 替换普通 Jar，产物路径固定为 target/wecode.jar。 -->
+                            <shadedArtifactAttached>false</shadedArtifactAttached>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <!-- 写入 java -jar 的应用入口。 -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>org.wecode.cli.Main</mainClass>
+                                </transformer>
+                                <!-- 合并 SPI 声明，确保 Flyway 等通过 ServiceLoader 发现的实现不会在打包后丢失。 -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>

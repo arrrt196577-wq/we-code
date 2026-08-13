@@ -15,4 +15,4 @@
 ## 图表索引
 
 - [会话数据库实体关系图](session-database-er.md)：展示 `workspaces`、`sessions`、`session_message` 和 `tool_execution` 四张 baseline V1 表的字段、约束及关联关系。
-- [用户请求到最终输出流程图](request-to-output-flow.md)：展示 CLI 接收任务、调用模型、执行工具循环并输出最终文本的当前流程。
+- [WeCode 工作区启动流程图](request-to-output-flow.md)：展示 CLI 检查当前真实目录、确认并创建 Workspace 或取消退出的当前流程。

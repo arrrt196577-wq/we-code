@@ -14,25 +14,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * {@link ProjectResolver} 的目录解析测试。
+ * {@link WorkspaceResolver} 的工作区路径解析测试。
  */
-class ProjectResolverTest {
+class WorkspaceResolverTest {
 
-    private final ProjectResolver resolver = new ProjectResolver();
+    private final WorkspaceResolver resolver = new WorkspaceResolver();
 
     @TempDir
     Path temporaryDirectory;
 
-    /** 验证非 Git 目录会以启动目录本身作为最小项目边界。 */
+    /** 验证非 Git 目录会以执行命令的真实目录作为工作区路径。 */
     @Test
     void resolveUsesLaunchDirectoryForNonGitDirectory() throws IOException {
         Path launchDirectory = Files.createDirectories(temporaryDirectory.resolve("plain-project").resolve("src"));
 
-        ProjectContext context = resolver.resolve(launchDirectory);
+        WorkspaceContext context = resolver.resolve(launchDirectory);
 
-        assertEquals(launchDirectory.toRealPath(), context.launchDirectory());
-        assertEquals(launchDirectory.toRealPath(), context.projectRoot());
-        assertEquals(launchDirectory.toRealPath(), context.workingDirectory());
+        assertEquals(launchDirectory.toRealPath(), context.workspacePath());
         assertEquals(ProjectType.LOCAL_DIRECTORY, context.type());
     }
 
@@ -44,20 +42,18 @@ class ProjectResolverTest {
         assertThrows(IllegalArgumentException.class, () -> resolver.resolve(missingDirectory));
     }
 
-    /** 验证从 Git 仓库子目录启动时，会解析到最近 Git worktree 根目录。 */
+    /** 验证从 Git 仓库子目录启动时，工作区路径仍是执行命令的目录。 */
     @Test
-    void resolveUsesGitWorktreeRootForNestedDirectory() throws IOException, InterruptedException {
+    void resolveKeepsLaunchDirectoryForNestedGitDirectory() throws IOException, InterruptedException {
         // 测试环境未安装 Git 时跳过；生产代码会自动降级为本地目录。
         Assumptions.assumeTrue(isGitAvailable(), "Git is required for this test");
         Path repositoryRoot = Files.createDirectories(temporaryDirectory.resolve("repository"));
         runGit(repositoryRoot, "init");
         Path launchDirectory = Files.createDirectories(repositoryRoot.resolve("module").resolve("src"));
 
-        ProjectContext context = resolver.resolve(launchDirectory);
+        WorkspaceContext context = resolver.resolve(launchDirectory);
 
-        assertEquals(launchDirectory.toRealPath(), context.launchDirectory());
-        assertEquals(repositoryRoot.toRealPath(), context.projectRoot());
-        assertEquals(launchDirectory.toRealPath(), context.workingDirectory());
+        assertEquals(launchDirectory.toRealPath(), context.workspacePath());
         assertEquals(ProjectType.GIT_REPOSITORY, context.type());
     }
 

@@ -1,81 +1,41 @@
-# 用户请求到最终输出流程图
+# WeCode 工作区启动流程图
 
-本图描述当前 CLI 一次性任务的实际执行流程，入口为 `org.wecode.cli.Main`，核心循环为 `org.wecode.agent.AgentLoop`。
+当前 `wecode` 命令只检查当前启动目录是否已初始化为工作区；不接收任务参数，也不启动 Agent。
 
 ```mermaid
 flowchart TD
-    USER(["用户通过 CLI 提交自然语言任务"])
+    START([用户执行 wecode])
+    PARSE[Picocli 解析帮助和可选配置路径]
+    CONFIG[加载 wecode.yml 并解析 storage.root]
+    DATABASE[打开 SessionDatabase]
+    RESOLVE[WorkspaceResolver 解析当前真实目录]
+    EXISTS{WorkspaceStore 按真实路径查询是否存在}
+    READY[输出当前目录已是 WeCode 工作区]
+    PROMPT[提示是否创建当前目录为工作区 Y/N]
+    ANSWER{输入是 Y 或 yes 吗}
+    CREATE[WorkspaceStore.create 写入 LOCAL_DIRECTORY]
+    CREATED[输出工作区已创建]
+    RACE{创建异常后路径是否已存在}
+    RACE_READY[输出已由其他进程创建]
+    CANCEL[输出已退出 WeCode]
+    WAIT[等待 5 秒]
+    SUCCESS([进程以 0 退出])
+    EXIT([进程以 1 退出])
+    FAILED([上抛异常并退出])
 
-    subgraph INIT["CLI 初始化与装配"]
-        PARSE["Picocli 解析配置路径和 TASK 参数"]
-        PROJECT["ProjectResolver 识别启动目录、项目根目录和项目类型"]
-        CONFIG["加载 wecode.yml<br/>解析 Provider 与存储目录"]
-        INFO["输出配置、项目和任务摘要"]
-        MODEL["ChatModelFactory 创建 OpenAiChatModel"]
-        REGISTRY["注册 Read、Glob、Grep、Edit 工具"]
-        SESSION["创建内存 Session<br/>追加 system prompt 和 user 消息"]
-        LOOP["创建 AgentLoop<br/>最大 LLM 轮次为 16"]
-    end
-
-    subgraph AGENT["Agent 循环"]
-        STEP["输出当前 step 进度"]
-        CHAT["ChatModel.chat<br/>发送完整消息历史和工具定义"]
-        HTTP["调用 OpenAI 兼容<br/>/chat/completions 非流式接口"]
-        RESPONSE["解析文本、thinking、finish reason 和 tool_calls"]
-        APPEND_ASSISTANT["将 assistant 响应追加到内存 Session"]
-        SAVE_CONTENT{"响应文本是否非空？"}
-        REMEMBER["保存为 lastContent"]
-        HAS_TOOLS{"是否包含 tool_calls？"}
-    end
-
-    subgraph TOOLS["工具调用处理"]
-        NEXT_CALL["按返回顺序取下一条 tool call"]
-        EXECUTE["ToolRegistry.execute<br/>按名称查找并执行工具"]
-        RESULT["生成成功或失败的 ToolResult"]
-        APPEND_TOOL["以 tool 消息追加执行结果"]
-        MORE_CALLS{"本轮还有 tool call？"}
-        MORE_STEPS{"当前 step 小于 16？"}
-    end
-
-    subgraph OUTPUT["结束与输出"]
-        NORMAL_REPLY["AgentLoop 返回 lastContent<br/>空值按空字符串处理"]
-        LIMIT_REPLY["返回 lastContent 加停止说明<br/>或无最终答案提示"]
-        PRINT["Main 输出分隔线和最终文本"]
-        SUCCESS(["进程以状态码 0 结束"])
-        FAILED(["异常上抛，当前任务中断"])
-    end
-
-    USER --> PARSE
-    PARSE --> PROJECT --> CONFIG --> INFO --> MODEL --> REGISTRY --> SESSION --> LOOP
-    LOOP --> STEP --> CHAT --> HTTP --> RESPONSE --> APPEND_ASSISTANT --> SAVE_CONTENT
-
-    CONFIG -. "配置读取或校验异常" .-> FAILED
-    HTTP -. "网络、HTTP 或响应解析异常" .-> FAILED
-
-    SAVE_CONTENT -->|"是"| REMEMBER --> HAS_TOOLS
-    SAVE_CONTENT -->|"否"| HAS_TOOLS
-    HAS_TOOLS -->|"否"| NORMAL_REPLY
-    HAS_TOOLS -->|"是"| NEXT_CALL --> EXECUTE --> RESULT --> APPEND_TOOL --> MORE_CALLS
-    MORE_CALLS -->|"是"| NEXT_CALL
-    MORE_CALLS -->|"否"| MORE_STEPS
-    MORE_STEPS -->|"是"| STEP
-    MORE_STEPS -->|"否"| LIMIT_REPLY
-    NORMAL_REPLY --> PRINT --> SUCCESS
-    LIMIT_REPLY --> PRINT
+    START --> PARSE --> CONFIG --> DATABASE --> RESOLVE --> EXISTS
+    EXISTS -->|是| READY --> SUCCESS
+    EXISTS -->|否| PROMPT --> ANSWER
+    ANSWER -->|是| CREATE --> CREATED --> SUCCESS
+    ANSWER -->|否、空输入、EOF 或无效输入| CANCEL --> WAIT --> EXIT
+    CREATE -.数据库写入异常.-> RACE
+    RACE -->|是| RACE_READY --> SUCCESS
+    RACE -->|否| FAILED
 ```
 
-## 当前实现边界
+## 当前边界
 
-- `Session` 当前仅维护内存消息列表；`workspaces`、`sessions`、`session_message` 和 `tool_execution` 四张表尚未接入这条 CLI 调用链，因此进程结束后本次对话不会由该流程持久化。
-- LLM 请求当前是非流式调用，收到完整 `LlmResponse` 后才继续执行。
-- 同一轮中的多条工具调用按模型返回顺序串行执行；工具失败也会转换为 `tool` 消息回灌给模型，由模型决定下一步。
-- 正常停止条件只有“本轮没有工具调用”；达到 16 轮后强制停止。`StopCondition` 类当前尚未接入。
-- `permission` 模块当前没有在 `Main` 或 `AgentLoop` 中参与工具执行授权。
-
-## 主要代码位置
-
-- `cli/src/main/java/org/wecode/cli/Main.java`：CLI 参数解析、依赖装配和最终输出。
-- `agent/src/main/java/org/wecode/agent/AgentLoop.java`：模型调用、工具执行和停止逻辑。
-- `llm/src/main/java/org/wecode/llm/chat/OpenAiChatModel.java`：请求构造、HTTP 调用和响应解析。
-- `tools/src/main/java/org/wecode/tools/registry/ToolRegistry.java`：工具注册、查找和执行。
-- `session/src/main/java/org/wecode/session/Session.java`：当前的内存消息历史。
+- 工作区路径由 `WorkspaceResolver` 解析为当前启动目录的真实路径；查询与创建始终使用同一文本。
+- 创建记录固定为 `LOCAL_DIRECTORY`；Git 类型识别暂不影响持久化类型。
+- 用户输入仅接受 `Y`/`yes`（忽略大小写与首尾空白）；`N`/`no`、其他输入、空输入和 EOF 都不会创建工作区。
+- 用户取消后由 `WorkspaceStartupService` 输出退出提示、等待 5 秒，再由 `Main` 以退出码 `1` 结束；测试注入等待器，不进行真实等待。

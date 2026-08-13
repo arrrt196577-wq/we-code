@@ -1,39 +1,30 @@
 package org.wecode.cli;
 
-import org.wecode.agent.AgentLoop;
-import org.wecode.agent.PromptBuilder;
 import org.wecode.cli.config.ConfigResolver;
-import org.wecode.cli.config.ResolvedProviderConfig;
 import org.wecode.cli.config.WeCodeConfig;
 import org.wecode.cli.config.YamlConfigLoader;
-import org.wecode.cli.project.ProjectContext;
-import org.wecode.cli.project.ProjectResolver;
-import org.wecode.llm.chat.ChatModel;
-import org.wecode.llm.model.Message;
-import org.wecode.llm.provider.ChatModelFactory;
-import org.wecode.session.Session;
-import org.wecode.tools.impl.EditTool;
-import org.wecode.tools.impl.GlobTool;
-import org.wecode.tools.impl.GrepTool;
-import org.wecode.tools.impl.ReadTool;
-import org.wecode.tools.registry.ToolRegistry;
-import org.wecode.tools.rg.RipgrepClient;
-import org.wecode.tools.spi.ToolContext;
+import org.wecode.cli.project.WorkspaceStartupResult;
+import org.wecode.cli.project.WorkspaceStartupService;
+import org.wecode.cli.project.WorkspaceResolver;
+import org.wecode.session.persistence.SessionDatabase;
+import org.wecode.session.persistence.WorkspaceStore;
 import picocli.CommandLine;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.concurrent.Callable;
 
 /**
- * CLI 入口：解析命令参数、识别当前项目、装配 Agent 并执行一次任务。
+ * WeCode CLI 入口：确认当前真实目录是否已初始化为工作区。
  * <p>
- * 当前版本仅支持一次性任务；交互式会话会在会话持久化完成后接入。
+ * 当前版本只支持裸命令 {@code wecode} 的工作区检查与创建确认，不接收任务参数，也不启动 Agent。
  */
 @CommandLine.Command(
         name = "wecode",
         mixinStandardHelpOptions = true,
-        description = "在当前 Git 项目或本地目录中执行一次自然语言编码任务。"
+        description = "检查当前目录是否为 WeCode 工作区，并在需要时创建工作区。"
 )
 public final class Main implements Callable<Integer> {
 
@@ -41,17 +32,9 @@ public final class Main implements Callable<Integer> {
     @CommandLine.Option(
             names = {"-c", "--config"},
             defaultValue = "wecode.yml",
-            description = "LLM 配置文件路径，默认值：${DEFAULT-VALUE}"
+            description = "WeCode 配置文件路径，默认值：${DEFAULT-VALUE}"
     )
     private Path configPath;
-
-    /** 本次一次性任务的自然语言文本。 */
-    @CommandLine.Parameters(
-            arity = "1..*",
-            paramLabel = "TASK",
-            description = "要交给 Agent 的自然语言任务"
-    )
-    private List<String> taskParts;
 
     private Main() {
     }
@@ -67,56 +50,25 @@ public final class Main implements Callable<Integer> {
     }
 
     /**
-     * 在当前项目中执行一次自然语言任务。
+     * 执行当前目录的工作区启动检查。
      *
-     * @return 成功时返回 0
+     * @return 工作区已存在或已创建时返回 {@code 0}；用户取消时返回 {@code 1}
      */
     @Override
     public Integer call() {
-        Path launchDirectory = Path.of("").toAbsolutePath().normalize();
-        ProjectContext projectContext = new ProjectResolver().resolve(launchDirectory);
-        String task = String.join(" ", taskParts);
-
-        WeCodeConfig fileConfig = YamlConfigLoader.load(configPath);
-        ResolvedProviderConfig provider = ConfigResolver.resolveActiveProvider(fileConfig.llm());
-        Path storageRoot = ConfigResolver.resolveStorageRoot(fileConfig.storage());
-
-        System.out.println("config file      : " + configPath.toAbsolutePath());
-        System.out.println("storage root     : " + storageRoot);
-        System.out.println("launch directory : " + projectContext.launchDirectory());
-        System.out.println("project root     : " + projectContext.projectRoot());
-        System.out.println("project type     : " + projectContext.type());
-        System.out.println("provider         : " + provider.name());
-        System.out.println("protocol         : " + provider.protocol());
-        System.out.println("model            : " + provider.model());
-        System.out.println("task             : " + task);
-        System.out.println("---");
-
-        ChatModel chatModel = ChatModelFactory.create(provider.toProviderDefinition());
-
-        ToolRegistry registry = new ToolRegistry();
-        registry.register(new ReadTool());
-        // Glob/Grep 共享同一个 rg 客户端；本机未安装 rg 时会由工具返回明确错误。
-        RipgrepClient ripgrep = RipgrepClient.fromEnvironment();
-        registry.register(new GlobTool(ripgrep));
-        registry.register(new GrepTool(ripgrep));
-        registry.register(new EditTool());
-
-        Session session = new Session();
-        session.append(Message.system(new PromptBuilder().buildSystemPrompt()));
-        session.append(Message.user(task));
-
-        AgentLoop loop = new AgentLoop(
-                chatModel,
-                registry,
-                ToolContext.of(projectContext.projectRoot()),
-                AgentLoop.DEFAULT_MAX_STEPS,
-                System.out::println
+        WeCodeConfig config = YamlConfigLoader.load(configPath);
+        Path storageRoot = ConfigResolver.resolveStorageRoot(config.storage());
+        WorkspaceStore workspaceStore = new WorkspaceStore(SessionDatabase.open(storageRoot));
+        WorkspaceStartupService startupService = new WorkspaceStartupService(
+                workspaceStore,
+                new WorkspaceResolver(),
+                new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)),
+                System.out,
+                Thread::sleep
         );
 
-        String reply = loop.run(session);
-        System.out.println("---");
-        System.out.println(reply == null ? "" : reply);
-        return 0;
+        WorkspaceStartupResult result = startupService.start(Path.of(""));
+        // 用户未确认创建时，已由启动服务输出退出提示并等待五秒。
+        return result == WorkspaceStartupResult.CANCELLED ? 1 : 0;
     }
 }

@@ -31,7 +31,7 @@ public final class AgentLoop {
     /**
      * @param chatModel     真 LLM 或测试替身
      * @param toolRegistry  已注册工具
-     * @param toolContext   项目根目录上下文
+     * @param toolContext   工作区路径上下文
      * @param maxSteps      最大 chat 轮次；须 &gt; 0
      * @param stepLogger    每步进度日志；可为 null（静默）
      */
