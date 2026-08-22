@@ -1,5 +1,7 @@
 package org.wecode.session.persistence.entity;
 
+import org.wecode.session.SessionTitle;
+
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -12,6 +14,8 @@ import java.util.Objects;
  * @param id                   会话唯一标识，由应用层生成
  * @param workspaceId                    所属工作区标识
  * @param workingDirectoryRelativePath   相对于工作区根目录的固定工作目录，根目录用 {@code .} 表示
+ * @param title                会话展示标题；{@code null} 表示尚未生成或设置标题，非空时最多 200 个 Unicode 码点
+ * @param titleSource          标题来源；仅当 {@code title} 非空时存在
  * @param status               会话当前运行状态
  * @param lastSequenceNo       已持久化的最后一个会话事件序号
  * @param version              乐观锁版本号
@@ -23,6 +27,8 @@ public record SessionRecord(
         String id,
         String workspaceId,
         String workingDirectoryRelativePath,
+        String title,
+        SessionTitleSource titleSource,
         SessionStatus status,
         long lastSequenceNo,
         long version,
@@ -42,6 +48,7 @@ public record SessionRecord(
                 "workingDirectoryRelativePath"
         );
         workingDirectoryRelativePath = requireNormalizedRelativePath(workingDirectoryRelativePath);
+        validateTitleAndSource(title, titleSource);
         status = Objects.requireNonNull(status, "status");
         metadataJson = requireNonBlank(metadataJson, "metadataJson");
 
@@ -115,5 +122,26 @@ public record SessionRecord(
         } catch (InvalidPathException exception) {
             throw new IllegalArgumentException("workingDirectoryRelativePath is invalid: " + value, exception);
         }
+    }
+
+    /**
+     * 校验可选会话标题的长度边界。
+     *
+     * @param title 待持久化的会话标题；{@code null} 表示尚未命名
+     * @return 原始标题，保留用户或模型提供的文本
+     */
+    private static void validateTitleAndSource(String title, SessionTitleSource titleSource) {
+        // 未命名会话不能伪造标题来源。
+        if (title == null) {
+            if (titleSource != null) {
+                throw new IllegalArgumentException("titleSource must be null when title is null");
+            }
+            return;
+        }
+        // 已命名会话必须同时保存来源，以保障模型与用户重命名的覆盖规则。
+        if (titleSource == null) {
+            throw new IllegalArgumentException("titleSource must not be null when title is present");
+        }
+        SessionTitle.requireValid(title);
     }
 }

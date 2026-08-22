@@ -35,9 +35,10 @@ public final class OpenAiChatModel implements ChatModel {
     /**
      * 推理/思考相关可选参数（来自入口配置拆解，可为 null）。
      *
-     * @param reasoningEffort   如 low/medium/high；写入请求 {@code reasoning_effort}
-     * @param returnThinking    为 true 时解析并填入 {@link LlmResponse#thinking()}
-     * @param thinkingFieldName 响应里思考字段名，默认 {@code reasoning_content}
+     * @param enabled            是否解析响应中的思考内容并填入 {@link LlmResponse#thinking()}
+     * @param sendThinkingToggle 是否向 Provider 请求体发送思考模式开关
+     * @param reasoningEffort    如 low/medium/high；写入请求 {@code reasoning_effort}
+     * @param thinkingFieldName  响应里思考字段名，默认 {@code reasoning_content}
      */
     public record ThinkingOptions(
             Boolean enabled,

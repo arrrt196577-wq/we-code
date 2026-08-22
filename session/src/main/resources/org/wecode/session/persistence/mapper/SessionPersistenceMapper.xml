@@ -9,6 +9,8 @@
             <idArg column="id" javaType="java.lang.String"/>
             <arg column="workspace_id" javaType="java.lang.String"/>
             <arg column="working_directory_relative_path" javaType="java.lang.String"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="title_source" javaType="org.wecode.session.persistence.entity.SessionTitleSource"/>
             <arg column="status" javaType="org.wecode.session.persistence.entity.SessionStatus"/>
             <arg column="last_sequence_no" javaType="_long"/>
             <arg column="version" javaType="_long"/>
@@ -21,27 +23,60 @@
     <insert id="insert" parameterType="org.wecode.session.persistence.entity.SessionRecord">
         INSERT INTO sessions (
             id, workspace_id, working_directory_relative_path,
-            status, last_sequence_no, version, created_at, updated_at, metadata_json
+            title, title_source, status, last_sequence_no, version, created_at, updated_at, metadata_json
         ) VALUES (
             #{id}, #{workspaceId}, #{workingDirectoryRelativePath},
-            #{status}, #{lastSequenceNo}, #{version}, #{createdAt}, #{updatedAt}, #{metadataJson}
+            #{title}, #{titleSource}, #{status}, #{lastSequenceNo}, #{version}, #{createdAt}, #{updatedAt}, #{metadataJson}
         )
     </insert>
 
     <select id="findById" resultMap="sessionRecordResultMap">
         SELECT id, workspace_id, working_directory_relative_path,
-               status, last_sequence_no, version, created_at, updated_at, metadata_json
+               title, title_source, status, last_sequence_no, version, created_at, updated_at, metadata_json
         FROM sessions
         WHERE id = #{sessionId}
     </select>
 
     <select id="findByWorkspaceId" resultMap="sessionRecordResultMap">
         SELECT id, workspace_id, working_directory_relative_path,
-               status, last_sequence_no, version, created_at, updated_at, metadata_json
+               title, title_source, status, last_sequence_no, version, created_at, updated_at, metadata_json
         FROM sessions
         WHERE workspace_id = #{workspaceId}
         ORDER BY updated_at DESC, id DESC
     </select>
+
+    <!-- 用户重命名与后续模型命名都必须通过版本条件更新，避免覆盖较新的会话状态。 -->
+    <update id="renameTitle">
+        UPDATE sessions
+        SET title = #{title},
+            title_source = 'USER',
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{sessionId}
+          AND version = #{expectedVersion}
+    </update>
+
+    <!-- 模型标题只能替换首条消息产生的临时标题，绝不覆盖用户 rename。 -->
+    <update id="replaceTemporaryTitle">
+        UPDATE sessions
+        SET title = #{title},
+            title_source = 'MODEL',
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{sessionId}
+          AND version = #{expectedVersion}
+          AND title_source = 'TEMPORARY'
+    </update>
+
+    <update id="updateStatus">
+        UPDATE sessions
+        SET status = #{status},
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{sessionId}
+          AND version = #{expectedVersion}
+          AND status &lt;&gt; 'ARCHIVED'
+    </update>
 
     <!--
         调用方必须检查影响行数。只有本语句成功后，才能在同一事务中追加 session_message 记录。
@@ -60,7 +95,7 @@
 
     <select id="findRecoverable" resultMap="sessionRecordResultMap">
         SELECT id, workspace_id, working_directory_relative_path,
-               status, last_sequence_no, version, created_at, updated_at, metadata_json
+               title, title_source, status, last_sequence_no, version, created_at, updated_at, metadata_json
         FROM sessions
         WHERE status IN ('RUNNING', 'INTERRUPTED')
         ORDER BY updated_at ASC, id ASC

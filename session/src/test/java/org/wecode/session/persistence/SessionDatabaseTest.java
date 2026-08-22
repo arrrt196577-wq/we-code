@@ -2,12 +2,14 @@ package org.wecode.session.persistence;
 
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.exceptions.PersistenceException;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.wecode.session.persistence.entity.SessionMessageRecord;
 import org.wecode.session.persistence.entity.SessionMessageType;
 import org.wecode.session.persistence.entity.SessionRecord;
 import org.wecode.session.persistence.entity.SessionStatus;
+import org.wecode.session.persistence.entity.SessionTitleSource;
 import org.wecode.session.persistence.entity.ToolExecutionRecord;
 import org.wecode.session.persistence.entity.ToolExecutionStatus;
 import org.wecode.session.persistence.entity.WorkspaceRecord;
@@ -28,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import javax.sql.DataSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -92,6 +95,63 @@ class SessionDatabaseTest {
     }
 
     /**
+     * 验证已有 V2 数据库中的非空标题会在 V3 迁移后补齐临时标题来源。
+     */
+    @Test
+    void migratesExistingV2TitleToTemporarySource() throws Exception {
+        Path storageRoot = temporaryDirectory.resolve("storage");
+        Path databasePath = storageRoot.resolve(SessionDatabase.DATABASE_FILE_NAME);
+        Files.createDirectories(storageRoot);
+        DataSource dataSource = SessionPersistenceConfiguration.createDataSource(databasePath);
+        Flyway.configure()
+                .dataSource(dataSource)
+                .locations("classpath:db/migration")
+                .target("2")
+                .load()
+                .migrate();
+
+        try (var connection = dataSource.getConnection();
+             PreparedStatement workspaceStatement = connection.prepareStatement("""
+                     INSERT INTO workspaces (id, root_path, type, trusted_at, created_at, metadata_json)
+                     VALUES (?, ?, ?, ?, ?, ?)
+                     """);
+             PreparedStatement sessionStatement = connection.prepareStatement("""
+                     INSERT INTO sessions (
+                         id, workspace_id, working_directory_relative_path, title, status,
+                         last_sequence_no, version, created_at, updated_at, metadata_json
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     """)) {
+            workspaceStatement.setString(1, "workspace-1");
+            workspaceStatement.setString(2, temporaryDirectory.resolve("project").toAbsolutePath().normalize().toString());
+            workspaceStatement.setString(3, "LOCAL_DIRECTORY");
+            workspaceStatement.setLong(4, 1_000L);
+            workspaceStatement.setLong(5, 1_000L);
+            workspaceStatement.setString(6, "{\"formatVersion\":1}");
+            assertEquals(1, workspaceStatement.executeUpdate());
+            sessionStatement.setString(1, "session-1");
+            sessionStatement.setString(2, "workspace-1");
+            sessionStatement.setString(3, ".");
+            sessionStatement.setString(4, "旧标题");
+            sessionStatement.setString(5, "IDLE");
+            sessionStatement.setLong(6, 0L);
+            sessionStatement.setLong(7, 0L);
+            sessionStatement.setLong(8, 1_000L);
+            sessionStatement.setLong(9, 1_000L);
+            sessionStatement.setString(10, "{\"formatVersion\":1}");
+            assertEquals(1, sessionStatement.executeUpdate());
+        }
+
+        SessionDatabase upgraded = SessionDatabase.open(storageRoot);
+
+        try (SqlSession sqlSession = upgraded.openSession()) {
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            SessionRecord session = sessionMapper.findById("session-1");
+            assertEquals("旧标题", session.title());
+            assertEquals(SessionTitleSource.TEMPORARY, session.titleSource());
+        }
+    }
+
+    /**
      * 验证四张基线表的 Mapper 可以写入、读取压缩节点，并完成一次工具领取和结果写回。
      */
     @Test
@@ -133,6 +193,8 @@ class SessionDatabaseTest {
                     "session-1",
                     "workspace-1",
                     ".",
+                    "会话标题",
+                    SessionTitleSource.MODEL,
                     SessionStatus.RUNNING,
                     0,
                     0,
@@ -226,6 +288,7 @@ class SessionDatabaseTest {
             assertNotNull(session);
             assertEquals("workspace-1", session.workspaceId());
             assertEquals(".", session.workingDirectoryRelativePath());
+            assertEquals("会话标题", session.title());
             assertEquals(1, sessionMapper.findByWorkspaceId("workspace-1").size());
             assertEquals(4, session.lastSequenceNo());
             assertEquals(4, session.version());
@@ -267,7 +330,7 @@ class SessionDatabaseTest {
                     "{\"formatVersion\":1}"
             )));
             assertEquals(1, sessionMapper.insert(new SessionRecord(
-                    "session-1", "workspace-1", ".", SessionStatus.IDLE,
+                    "session-1", "workspace-1", ".", null, null, SessionStatus.IDLE,
                     0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
             )));
             sqlSession.commit();
@@ -297,15 +360,64 @@ class SessionDatabaseTest {
         long createdAt = 1_000L;
 
         assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
-                "absolute", "workspace-1", temporaryDirectory.toAbsolutePath().toString(), SessionStatus.IDLE,
+                "absolute", "workspace-1", temporaryDirectory.toAbsolutePath().toString(), null, null, SessionStatus.IDLE,
                 0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
         ));
         assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
-                "escaping", "workspace-1", "../outside", SessionStatus.IDLE,
+                "escaping", "workspace-1", "../outside", null, null, SessionStatus.IDLE,
                 0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
         ));
         assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
-                "unnormalized", "workspace-1", "module/../other", SessionStatus.IDLE,
+                "unnormalized", "workspace-1", "module/../other", null, null, SessionStatus.IDLE,
+                0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
+        ));
+    }
+
+    /**
+     * 验证标题可为空、可用乐观锁更新，且应用层拒绝空白和超长标题。
+     */
+    @Test
+    void persistsAndUpdatesOptionalSessionTitleWithLengthLimit() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        long createdAt = 1_000L;
+
+        try (SqlSession sqlSession = database.openSession()) {
+            WorkspacePersistenceMapper workspaceMapper = sqlSession.getMapper(WorkspacePersistenceMapper.class);
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            assertEquals(1, workspaceMapper.insert(new WorkspaceRecord(
+                    "workspace-1",
+                    temporaryDirectory.resolve("project").toAbsolutePath().normalize().toString(),
+                    WorkspaceType.LOCAL_DIRECTORY,
+                    createdAt,
+                    createdAt,
+                    "{\"formatVersion\":1}"
+            )));
+            assertEquals(1, sessionMapper.insert(new SessionRecord(
+                    "session-1", "workspace-1", ".", null, null, SessionStatus.IDLE,
+                    0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
+            )));
+            assertEquals(1, sessionMapper.renameTitle("session-1", 0, "重命名后的标题", createdAt + 1));
+            sqlSession.commit();
+        }
+
+        try (SqlSession sqlSession = database.openSession()) {
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            SessionRecord session = sessionMapper.findById("session-1");
+            assertNotNull(session);
+            assertEquals("重命名后的标题", session.title());
+            assertEquals(SessionTitleSource.USER, session.titleSource());
+            assertEquals(1, session.version());
+            assertEquals(createdAt + 1, session.updatedAt());
+            // 旧版本不能覆盖已更新的标题。
+            assertEquals(0, sessionMapper.renameTitle("session-1", 0, "过期标题", createdAt + 2));
+        }
+
+        assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
+                "blank-title", "workspace-1", ".", " ", SessionTitleSource.USER, SessionStatus.IDLE,
+                0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
+        ));
+        assertThrows(IllegalArgumentException.class, () -> new SessionRecord(
+                "long-title", "workspace-1", ".", "a".repeat(201), SessionTitleSource.USER, SessionStatus.IDLE,
                 0, 0, createdAt, createdAt, "{\"formatVersion\":1}"
         ));
     }

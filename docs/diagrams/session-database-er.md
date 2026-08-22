@@ -22,6 +22,8 @@ erDiagram
         TEXT id PK "会话 ID"
         TEXT workspace_id FK "所属工作区"
         TEXT working_directory_relative_path "不可变相对工作目录"
+        TEXT title "可空会话标题，最长 200 个 Unicode 码点"
+        TEXT title_source "TEMPORARY / MODEL / USER"
         TEXT status "会话状态"
         INTEGER last_sequence_no "最后消息序号"
         INTEGER version "并发控制版本"
@@ -66,6 +68,8 @@ erDiagram
 
 - 一个 `workspaces` 记录可以包含零到多个 `sessions`；会话通过 `workspace_id` 获取唯一权威的工作区访问边界，不重复保存根路径。
 - `workspaces.root_path` 和会话的 `workspace_id + working_directory_relative_path` 都由触发器保证创建后不可修改；需要切换目录时必须创建新的工作区或会话。
+- `sessions.title` 可为 `NULL`，表示尚未命名；非空时长度限制为 1 到 200 个 Unicode 码点。`title_source` 与标题同时为空或同时存在：`TEMPORARY` 表示首条用户消息截断标题，`MODEL` 表示一次模型命名结果，`USER` 表示 `/rename` 手动标题。
+- 模型标题更新仅匹配 `title_source = TEMPORARY`；`/rename` 会更新为 `USER`。标题更新同时递增会话 `version`，避免迟到的模型结果覆盖手动重命名。
 - `working_directory_relative_path` 相对于 `workspaces.root_path`，工作区根目录使用 `.` 表示。应用加载会话时必须解析并再次验证结果没有越过工作区根目录。
 - 一个 `sessions` 记录可以包含零到多条 `session_message`；每条消息必须属于一个会话。删除会话时，其消息通过 `ON DELETE CASCADE` 级联删除。
 - 一条 `session_message` 可以派生零到多条 `tool_execution`；每条工具执行必须关联一条消息。数据库触发器进一步保证该消息的类型必须为 `ASSISTANT`。删除消息时，其工具执行记录级联删除。

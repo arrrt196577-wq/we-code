@@ -39,6 +39,54 @@ public interface SessionPersistenceMapper {
     List<SessionRecord> findByWorkspaceId(@Param("workspaceId") String workspaceId);
 
     /**
+     * 使用乐观锁更新会话标题。
+     *
+     * @param sessionId       会话唯一标识
+     * @param expectedVersion 调用方读取到的版本号
+     * @param title           新标题；{@code null} 表示清除标题，非空时必须为 1 到 200 个 Unicode 码点
+     * @param updatedAt       更新时刻，UTC epoch milliseconds
+     * @return 更新成功时返回 {@code 1}；返回 {@code 0} 表示会话不存在或已被并发修改
+     */
+    int renameTitle(
+            @Param("sessionId") String sessionId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("title") String title,
+            @Param("updatedAt") long updatedAt
+    );
+
+    /**
+     * 仅在标题仍为临时标题时写入模型生成的标题。
+     *
+     * @param sessionId       会话唯一标识
+     * @param expectedVersion 调用方读取到的版本号
+     * @param title           已校验的模型标题
+     * @param updatedAt       更新时刻，UTC epoch milliseconds
+     * @return 更新成功时返回 {@code 1}；返回 {@code 0} 表示标题已被模型或用户更新
+     */
+    int replaceTemporaryTitle(
+            @Param("sessionId") String sessionId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("title") String title,
+            @Param("updatedAt") long updatedAt
+    );
+
+    /**
+     * 使用乐观锁更新会话运行状态。
+     *
+     * @param sessionId       会话唯一标识
+     * @param expectedVersion 调用方读取到的版本号
+     * @param status          新状态
+     * @param updatedAt       更新时刻，UTC epoch milliseconds
+     * @return 更新成功时返回 {@code 1}
+     */
+    int updateStatus(
+            @Param("sessionId") String sessionId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("status") SessionStatus status,
+            @Param("updatedAt") long updatedAt
+    );
+
+    /**
      * 以乐观锁推进会话事件序号，并同步更新运行状态。
      *
      * @param sessionId           会话唯一标识
