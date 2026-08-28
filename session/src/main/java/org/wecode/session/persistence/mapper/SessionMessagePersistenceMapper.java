@@ -27,6 +27,14 @@ public interface SessionMessagePersistenceMapper {
     List<SessionMessageRecord> findAllBySessionId(@Param("sessionId") String sessionId);
 
     /**
+     * 读取会话创建时写入的首条固定 system 消息。
+     *
+     * @param sessionId 会话标识
+     * @return 最早的 system 消息；会话历史损坏或为空时为 {@code null}
+     */
+    SessionMessageRecord findFirstSystemMessage(@Param("sessionId") String sessionId);
+
+    /**
      * 读取压缩节点之后的原始历史尾部，不包含 compaction 事件本身。
      *
      * @param sessionId     会话标识
@@ -39,7 +47,7 @@ public interface SessionMessagePersistenceMapper {
     );
 
     /**
-     * 查询覆盖范围最大的最新压缩检查点。
+     * 查询会话内最后追加的压缩检查点。
      *
      * @param sessionId 会话标识
      * @return 不存在压缩检查点时为 {@code null}

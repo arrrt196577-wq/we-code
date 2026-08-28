@@ -47,6 +47,22 @@
         ORDER BY call_index ASC
     </select>
 
+    <select id="findBySessionIdAfterSequence" resultMap="toolExecutionRecordResultMap">
+        SELECT tool_execution.id, tool_execution.assistant_message_id, tool_execution.call_id,
+               tool_execution.call_index, tool_execution.tool_name, tool_execution.arguments_json,
+               tool_execution.status, tool_execution.result_json, tool_execution.result_payload_version,
+               tool_execution.attempt_count, tool_execution.lease_token, tool_execution.lease_until,
+               tool_execution.revision, tool_execution.created_at, tool_execution.started_at,
+               tool_execution.finished_at, tool_execution.updated_at
+        FROM tool_execution
+        INNER JOIN session_message
+            ON session_message.id = tool_execution.assistant_message_id
+        WHERE session_message.session_id = #{sessionId}
+          AND session_message.message_type = 'ASSISTANT'
+          AND session_message.sequence_no &gt; #{afterSequence}
+        ORDER BY session_message.sequence_no ASC, tool_execution.call_index ASC
+    </select>
+
     <update id="claimPending">
         UPDATE tool_execution
         SET status = 'RUNNING',

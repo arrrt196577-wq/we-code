@@ -10,12 +10,14 @@ import java.util.Objects;
  * @param toolCalls     模型请求的工具调用；无则为 empty
  * @param finishReason  停止原因
  * @param thinking      推理/思考文本（如 reasoning_content）；没有则为 null
+ * @param usage         Provider 返回的本次 token 用量；Provider 未返回或格式不完整时为 null
  */
 public record LlmResponse(
         String content,
         List<ToolCall> toolCalls,
         FinishReason finishReason,
-        String thinking
+        String thinking,
+        LlmUsage usage
 ) {
 
     public LlmResponse {
@@ -28,6 +30,18 @@ public record LlmResponse(
     }
 
     /**
+     * 无 usage 字段时的便捷构造，兼容既有 Provider 实现和调用方。
+     *
+     * @param content      正文
+     * @param toolCalls    工具调用
+     * @param finishReason 停止原因
+     * @param thinking     推理/思考文本
+     */
+    public LlmResponse(String content, List<ToolCall> toolCalls, FinishReason finishReason, String thinking) {
+        this(content, toolCalls, finishReason, thinking, null);
+    }
+
+    /**
      * 无思考字段时的便捷构造。
      *
      * @param content      正文
@@ -35,7 +49,7 @@ public record LlmResponse(
      * @param finishReason 停止原因
      */
     public LlmResponse(String content, List<ToolCall> toolCalls, FinishReason finishReason) {
-        this(content, toolCalls, finishReason, null);
+        this(content, toolCalls, finishReason, null, null);
     }
 
     public boolean hasToolCalls() {

@@ -13,6 +13,7 @@ import org.wecode.tools.spi.ToolContext;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Agent 编排：chat → 执行 tool → 回灌 observation，直到无 tool call 或达最大步数。
@@ -141,12 +142,44 @@ public final class AgentLoop {
      */
     public String run(Session session) {
         Objects.requireNonNull(session, "session");
+        return run(
+                session::messages,
+                response -> session.append(Message.assistant(response.content(), response.toolCalls(), response.thinking())),
+                result -> session.append(Message.tool(result.toolCallId(), result.content()))
+        );
+    }
+
+    /**
+     * 在每轮请求前从外部来源读取会话历史。
+     * <p>
+     * 该入口不在 Agent 内缓存消息；监听器将 assistant 和工具结果持久化后，下一轮会重新读取来源。
+     *
+     * @param messageProvider 每轮提供完整 LLM 上下文的只读来源
+     * @return 最终助手文本；可能为空串
+     */
+    public String run(ConversationMessageProvider messageProvider) {
+        Objects.requireNonNull(messageProvider, "messageProvider");
+        return run(messageProvider::loadMessages, response -> {
+        }, result -> {
+        });
+    }
+
+    /** 使用消息来源和可选内存镜像执行 Agent 主循环。 */
+    private String run(
+            Supplier<List<Message>> messageLoader,
+            Consumer<LlmResponse> assistantAppender,
+            Consumer<ToolResult> toolResultAppender
+    ) {
+        Objects.requireNonNull(messageLoader, "messageLoader");
+        Objects.requireNonNull(assistantAppender, "assistantAppender");
+        Objects.requireNonNull(toolResultAppender, "toolResultAppender");
         List<ToolSpec> tools = toolRegistry.listSpecs();
         String lastContent = "";
 
         for (int step = 1; step <= maxSteps; step++) {
+            List<Message> messages = List.copyOf(Objects.requireNonNull(messageLoader.get(), "messageLoader result"));
             // 每轮请求前重新计算，因为工具调用和工具结果会持续改变有效上下文。
-            ContextWindowUsage contextWindowUsage = contextWindowPolicy.evaluate(session.messages(), tools);
+            ContextWindowUsage contextWindowUsage = contextWindowPolicy.evaluate(messages, tools);
             stepLogger.accept(contextWindowUsage.toLogMessage());
             executionListener.onContextWindowUsage(contextWindowUsage);
             // 当前阶段仅暴露压缩需求，真正压缩将在后续功能中接入此边界。
@@ -154,13 +187,12 @@ public final class AgentLoop {
                 stepLogger.accept("context: compaction required; continuing in observation-only mode");
             }
             stepLogger.accept("step " + step + "/" + maxSteps + ": chatting…");
-            LlmResponse response = chatModel.chat(session.messages(), tools);
+            LlmResponse response = chatModel.chat(messages, tools);
 
-            // 先把本轮 assistant（含可能的 tool_calls）写入历史
-            // 保存本轮思考内容，确保要求回传推理字段的 Provider 能完成后续工具调用。
-            session.append(Message.assistant(response.content(), response.toolCalls(), response.thinking()));
             // assistant 与待执行工具必须在实际副作用发生前交给持久化观察器。
             executionListener.onAssistantResponse(response);
+            // 持久化成功后才更新旧的内存镜像，避免两种历史来源出现不一致。
+            assistantAppender.accept(response);
             if (response.content() != null && !response.content().isBlank()) {
                 lastContent = response.content();
             }
@@ -190,8 +222,8 @@ public final class AgentLoop {
                 );
                 // observation 必须在回灌模型前同步落库，确保恢复历史完整。
                 executionListener.onToolExecutionCompleted(call, callIndex, result);
-                // 失败也回灌，让模型自行纠错
-                session.append(Message.tool(result.toolCallId(), result.content()));
+                // 持久化成功后才更新旧的内存镜像；失败 observation 也会回灌给模型。
+                toolResultAppender.accept(result);
             }
         }
 

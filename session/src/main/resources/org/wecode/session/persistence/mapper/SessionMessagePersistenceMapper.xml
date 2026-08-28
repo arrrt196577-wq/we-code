@@ -35,6 +35,16 @@
         ORDER BY sequence_no ASC
     </select>
 
+    <select id="findFirstSystemMessage" resultMap="sessionMessageRecordResultMap">
+        SELECT id, session_id, sequence_no, message_type,
+               payload_version, payload_json, compacts_through_sequence, created_at
+        FROM session_message
+        WHERE session_id = #{sessionId}
+          AND message_type = 'SYSTEM'
+        ORDER BY sequence_no ASC
+        LIMIT 1
+    </select>
+
     <select id="findAfterSequenceExcludingCompaction" resultMap="sessionMessageRecordResultMap">
         SELECT id, session_id, sequence_no, message_type,
                payload_version, payload_json, compacts_through_sequence, created_at
@@ -51,7 +61,7 @@
         FROM session_message
         WHERE session_id = #{sessionId}
           AND message_type = 'COMPACTION'
-        ORDER BY compacts_through_sequence DESC, sequence_no DESC
+        ORDER BY sequence_no DESC
         LIMIT 1
     </select>
 </mapper>

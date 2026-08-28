@@ -31,7 +31,8 @@ flowchart TD
     TITLE_OK{标题是否合法且仍为临时标题}
     UPDATE_TITLE[更新为 MODEL 标题]
     APPEND_USER[追加 USER 消息]
-    CONTEXT[每轮请求前按字符÷4估算窗口；达到阈值仅标记压缩需求]
+    LOAD_CONTEXT[每轮请求前从 SQLite 组装 LLM messages]
+    CONTEXT[按已组装 messages 和工具定义估算窗口；达到阈值仅标记压缩需求]
     AGENT[运行 Agent；同步持久化 assistant、工具领取和结果]
     RENAME_OK[更新标题并标记 USER 来源]
     UNKNOWN[输出不支持的命令]
@@ -55,9 +56,9 @@ flowchart TD
     COMMAND -->|未知 /命令| UNKNOWN --> INTERACTION_INPUT
     COMMAND -->|自然语言| ACTIVE
     ACTIVE -->|否| CREATE_SESSION --> TITLE --> TITLE_OK
-    TITLE_OK -->|是| UPDATE_TITLE --> CONTEXT --> AGENT
-    TITLE_OK -->|否| CONTEXT --> AGENT
-    ACTIVE -->|是| APPEND_USER --> CONTEXT
+    TITLE_OK -->|是| UPDATE_TITLE --> LOAD_CONTEXT --> CONTEXT --> AGENT
+    TITLE_OK -->|否| LOAD_CONTEXT --> CONTEXT --> AGENT
+    ACTIVE -->|是| APPEND_USER --> LOAD_CONTEXT
     RENAME -->|有活动 session 且参数合法| RENAME_OK --> INTERACTION_INPUT
     RENAME -->|否则| INTERACTION_INPUT
     AGENT --> INTERACTION_INPUT
@@ -72,5 +73,6 @@ flowchart TD
 - 工作区确认成功后，`Main` 将同一个 `BufferedReader` 交给交互循环，避免不同读取器竞争 `System.in`。`/exit`（忽略首尾空白）或 EOF 时以退出码 `0` 结束。
 - 首条非命令自然语言会创建 session，并在同一事务中写入固定 system prompt、首条 USER 和从首条消息截断的临时标题。标题模型仅在此处调用一次；失败、超时或非法结果时保留临时标题，后续消息、程序重启和未来 `/resume` 都不会自动重试。
 - `/rename <title>` 仅修改当前活动 session，标题标记为 `USER`；模型标题只可替换 `TEMPORARY` 标题，不能覆盖手动重命名。未知斜杠命令不会被当作自然语言，因此不会意外创建 session。
-- 后续自然语言只向内存中的活动 session 追加 USER 消息并执行 Agent。assistant 响应、工具领取和工具结果均同步写入数据库；本阶段不支持切换或恢复 session。
-- 每次模型请求前按完整消息与工具定义的 Unicode 字符数除以四估算输入 token。当前统一按 300k 上下文窗口、20k 安全余量和零输出 token 占位预算计算压缩阈值；达到阈值仅标记需求，尚不执行压缩。
+- 后续自然语言只向当前活动 session 追加 USER 消息。`activeSessionId` 仅保存在进程内作为选中标识；LLM 历史不再从内存 `Session` 读取。
+- 每次模型请求前，Agent 从 SQLite 组装有序 `messages`：始终使用会话创建时持久化的首条 SYSTEM；存在 compaction 时紧随其后注入最新摘要，并按 `sequence_no ASC` 回放其覆盖边界后的非压缩尾部。ASSISTANT 的 `tool_calls` 与紧随其后的终态 TOOL observation 一并恢复；未完成工具调用会拒绝构造请求上下文。
+- 每次模型请求前按已组装消息与工具定义的 Unicode 字符数除以四估算输入 token。当前统一按 300k 上下文窗口、20k 安全余量和零输出 token 占位预算计算压缩阈值；达到阈值仅标记需求，尚不生成新的压缩摘要。

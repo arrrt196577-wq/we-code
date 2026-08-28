@@ -1,6 +1,8 @@
 package org.wecode.llm.chat;
 
 import org.junit.jupiter.api.Test;
+import org.wecode.llm.model.LlmResponse;
+import org.wecode.llm.model.LlmUsage;
 import org.wecode.llm.model.Message;
 import org.wecode.llm.model.ToolCall;
 import org.wecode.llm.model.ToolSpec;
@@ -9,6 +11,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -116,5 +119,102 @@ class OpenAiChatModelTest {
 
         assertTrue(body.contains("\"reasoning_content\":\"需要先调用工具。\""));
         assertTrue(body.contains("\"tool_call_id\":\"call_1\""));
+    }
+
+    /** 验证 DeepSeek 非流式响应的 usage 可完整映射为统一领域模型。 */
+    @Test
+    void parseResponseMapsDeepSeekUsage() throws Exception {
+        OpenAiChatModel openAi = createTestModel();
+
+        LlmResponse response = openAi.parseResponse("""
+                {
+                  "choices": [{
+                    "message": {"role": "assistant", "content": "完成"},
+                    "finish_reason": "stop"
+                  }],
+                  "usage": {
+                    "prompt_tokens": 101,
+                    "completion_tokens": 29,
+                    "total_tokens": 130,
+                    "prompt_cache_hit_tokens": 80,
+                    "prompt_cache_miss_tokens": 21,
+                    "completion_tokens_details": {"reasoning_tokens": 12}
+                  }
+                }
+                """);
+
+        LlmUsage usage = response.usage();
+        assertEquals(101, usage.inputTokens());
+        assertEquals(29, usage.outputTokens());
+        assertEquals(130, usage.totalTokens());
+        assertEquals(80, usage.cachedInputTokens());
+        assertEquals(21, usage.uncachedInputTokens());
+        assertEquals(12, usage.reasoningTokens());
+    }
+
+    /** 验证兼容 Provider 缺少可选缓存、推理明细时仍保留核心 token 用量。 */
+    @Test
+    void parseResponseKeepsCoreUsageWhenOptionalDetailsAreMissing() throws Exception {
+        OpenAiChatModel openAi = createTestModel();
+
+        LlmResponse response = openAi.parseResponse("""
+                {
+                  "choices": [{
+                    "message": {"role": "assistant", "content": "完成"},
+                    "finish_reason": "stop"
+                  }],
+                  "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15
+                  }
+                }
+                """);
+
+        assertEquals(10, response.usage().inputTokens());
+        assertNull(response.usage().cachedInputTokens());
+        assertNull(response.usage().uncachedInputTokens());
+        assertNull(response.usage().reasoningTokens());
+    }
+
+    /** 验证 Provider 不返回 usage 或核心字段非法时，不影响正常响应解析。 */
+    @Test
+    void parseResponseFallsBackToNullUsageWhenUsageIsUnavailable() throws Exception {
+        OpenAiChatModel openAi = createTestModel();
+
+        LlmResponse missingUsage = openAi.parseResponse("""
+                {
+                  "choices": [{
+                    "message": {"role": "assistant", "content": "完成"},
+                    "finish_reason": "stop"
+                  }]
+                }
+                """);
+        LlmResponse invalidUsage = openAi.parseResponse("""
+                {
+                  "choices": [{
+                    "message": {"role": "assistant", "content": "完成"},
+                    "finish_reason": "stop"
+                  }],
+                  "usage": {
+                    "prompt_tokens": -1,
+                    "completion_tokens": 5,
+                    "total_tokens": 4
+                  }
+                }
+                """);
+
+        assertNull(missingUsage.usage());
+        assertNull(invalidUsage.usage());
+    }
+
+    /** 创建仅用于 JSON 构造与响应解析的固定模型实例。 */
+    private static OpenAiChatModel createTestModel() {
+        return new OpenAiChatModel(
+                "https://api.deepseek.com",
+                "sk-test",
+                "deepseek-v4-flash",
+                null
+        );
     }
 }

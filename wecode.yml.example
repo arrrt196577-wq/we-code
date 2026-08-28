@@ -29,5 +29,5 @@ llm:
       protocol: openai-chat-completions
       base-url: https://api.openai.com/v1
       api-key: ""
-      model: gpt-5.4
+      model: gpt-5.6-terra
       temperature: 0.2

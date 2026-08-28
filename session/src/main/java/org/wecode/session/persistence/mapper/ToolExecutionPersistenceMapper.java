@@ -30,6 +30,18 @@ public interface ToolExecutionPersistenceMapper {
     );
 
     /**
+     * 批量读取会话历史尾部所有 assistant 消息关联的工具调用。
+     *
+     * @param sessionId     会话标识
+     * @param afterSequence 仅返回来源 assistant 序号大于该值的调用
+     * @return 先按 assistant 消息序号、再按 callIndex 升序排列的工具调用
+     */
+    List<ToolExecutionRecord> findBySessionIdAfterSequence(
+            @Param("sessionId") String sessionId,
+            @Param("afterSequence") long afterSequence
+    );
+
+    /**
      * 通过乐观锁领取一条待执行调用并建立租约。
      *
      * @param id         工具执行记录标识

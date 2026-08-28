@@ -3,7 +3,13 @@ package org.wecode.session.persistence;
 import org.apache.ibatis.session.SqlSession;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.wecode.llm.model.FinishReason;
+import org.wecode.llm.model.LlmResponse;
+import org.wecode.llm.model.Message;
+import org.wecode.llm.model.Role;
+import org.wecode.llm.model.ToolCall;
 import org.wecode.session.SessionTitle;
+import org.wecode.session.persistence.entity.SessionMessageRecord;
 import org.wecode.session.persistence.entity.SessionMessageType;
 import org.wecode.session.persistence.entity.SessionRecord;
 import org.wecode.session.persistence.entity.SessionStatus;
@@ -13,11 +19,15 @@ import org.wecode.session.persistence.entity.WorkspaceType;
 import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
 import org.wecode.session.persistence.mapper.WorkspacePersistenceMapper;
+import org.wecode.session.persistence.payload.CompactionPayload;
+import org.wecode.session.persistence.payload.SessionPayloadCodec;
 
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -48,7 +58,7 @@ class SessionConversationStoreTest {
                 temporaryTitle
         );
 
-        assertEquals(2, created.runtimeSession().messages().size());
+        assertEquals(2, store.loadMessagesForLlm(created.session().id()).size());
         assertEquals(SessionStatus.RUNNING, created.session().status());
         assertEquals(2, created.session().lastSequenceNo());
         assertEquals(2, created.session().version());
@@ -90,6 +100,142 @@ class SessionConversationStoreTest {
 
         assertEquals(60, title.codePointCount(0, title.length()));
         assertTrue(title.endsWith("…"));
+    }
+
+    /** 验证模型上下文从 SQLite 重建 assistant 工具调用与按调用顺序排列的工具结果。 */
+    @Test
+    void loadsPersistedAssistantAndToolResultsForLlm() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        WorkspaceRecord workspace = insertWorkspace(database);
+        SessionConversationStore store = new SessionConversationStore(database);
+        SessionConversationStore.CreatedSession created = store.createFromFirstUserMessage(
+                workspace,
+                "固定 system prompt",
+                "v1",
+                "请读取配置文件。",
+                "读取配置文件"
+        );
+        LlmResponse toolCallingResponse = new LlmResponse(
+                null,
+                List.of(
+                        new ToolCall("call-1", "Read", "{\"path\":\"one.txt\"}"),
+                        new ToolCall("call-2", "Read", "{\"path\":\"two.txt\"}")
+                ),
+                FinishReason.TOOL_CALLS,
+                "需要依次读取两个文件。"
+        );
+
+        SessionConversationStore.PersistedAssistant persisted = store.appendAssistantResponse(
+                created.session().id(),
+                toolCallingResponse
+        );
+        // 每条工具 observation 必须在下一轮模型请求前完成持久化。
+        for (int index = 0; index < persisted.executions().size(); index++) {
+            var claimed = store.claimToolExecution(persisted.executions().get(index));
+            store.completeToolExecution(claimed, "result-" + (index + 1), index == 1);
+        }
+        store.appendUserMessage(created.session().id(), "请比较这两个文件。");
+
+        List<Message> messages = store.loadMessagesForLlm(created.session().id());
+
+        assertEquals(
+                List.of(Role.SYSTEM, Role.USER, Role.ASSISTANT, Role.TOOL, Role.TOOL, Role.USER),
+                messages.stream().map(Message::role).toList()
+        );
+        assertEquals("固定 system prompt", messages.get(0).content());
+        assertEquals("请读取配置文件。", messages.get(1).content());
+        assertEquals(toolCallingResponse.toolCalls(), messages.get(2).toolCalls());
+        assertEquals("需要依次读取两个文件。", messages.get(2).reasoningContent());
+        assertEquals("call-1", messages.get(3).toolCallId());
+        assertEquals("result-1", messages.get(3).content());
+        assertEquals("call-2", messages.get(4).toolCallId());
+        assertEquals("result-2", messages.get(4).content());
+        assertEquals("请比较这两个文件。", messages.get(5).content());
+    }
+
+    /** 验证已有 compaction 时保留固定 system、注入摘要并回放未覆盖的历史尾部。 */
+    @Test
+    void loadsInitialSystemCompactionAndUncompressedTailForLlm() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        WorkspaceRecord workspace = insertWorkspace(database);
+        SessionConversationStore store = new SessionConversationStore(database);
+        SessionConversationStore.CreatedSession created = store.createFromFirstUserMessage(
+                workspace,
+                "固定 system prompt",
+                "v1",
+                "已经完成需求分析。",
+                "完成需求分析"
+        );
+
+        appendCompaction(database, created.session().id(), "历史摘要：需求分析已经完成。");
+        store.appendUserMessage(created.session().id(), "请开始编码。");
+
+        List<Message> messages = store.loadMessagesForLlm(created.session().id());
+
+        assertEquals(List.of(Role.SYSTEM, Role.SYSTEM, Role.USER), messages.stream().map(Message::role).toList());
+        assertEquals("固定 system prompt", messages.get(0).content());
+        assertEquals("历史摘要：需求分析已经完成。", messages.get(1).content());
+        assertEquals("请开始编码。", messages.get(2).content());
+    }
+
+    /** 验证缺少终态工具结果的 assistant 历史不能被伪造成合法 LLM 请求。 */
+    @Test
+    void rejectsLlmContextWithIncompleteToolExecution() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        WorkspaceRecord workspace = insertWorkspace(database);
+        SessionConversationStore store = new SessionConversationStore(database);
+        SessionConversationStore.CreatedSession created = store.createFromFirstUserMessage(
+                workspace,
+                "固定 system prompt",
+                "v1",
+                "请读取配置文件。",
+                "读取配置文件"
+        );
+        store.appendAssistantResponse(
+                created.session().id(),
+                new LlmResponse(
+                        null,
+                        List.of(new ToolCall("call-1", "Read", "{\"path\":\"one.txt\"}")),
+                        FinishReason.TOOL_CALLS,
+                        null
+                )
+        );
+
+        assertThrows(IllegalStateException.class, () -> store.loadMessagesForLlm(created.session().id()));
+    }
+
+    /** 在不实现压缩策略的前提下，写入一条满足既有数据库约束的 compaction 检查点。 */
+    private static void appendCompaction(SessionDatabase database, String sessionId, String renderedMemory) {
+        SessionPayloadCodec payloadCodec = new SessionPayloadCodec();
+        SessionPayloadCodec.EncodedPayload encoded = payloadCodec.encodeMessage(
+                new CompactionPayload(renderedMemory, "test-v1")
+        );
+        try (SqlSession sqlSession = database.openSession()) {
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
+            SessionRecord current = sessionMapper.findById(sessionId);
+            SessionMessageRecord compaction = new SessionMessageRecord(
+                    "message-compaction",
+                    sessionId,
+                    current.lastSequenceNo() + 1,
+                    SessionMessageType.COMPACTION,
+                    encoded.payloadVersion(),
+                    encoded.payloadJson(),
+                    current.lastSequenceNo(),
+                    current.updatedAt() + 1
+            );
+            // 先推进乐观锁版本，再写入不可变 compaction 事件，保持与生产追加路径相同的原子约束。
+            assertEquals(1, sessionMapper.advanceForMessageAppend(
+                    sessionId,
+                    current.version(),
+                    current.lastSequenceNo(),
+                    compaction.sequenceNo(),
+                    SessionStatus.RUNNING,
+                    compaction.createdAt()
+            ));
+            assertEquals(1, messageMapper.insert(compaction));
+            sqlSession.commit();
+        }
     }
 
     /** 插入一个已确认工作区，供会话外键关联使用。 */

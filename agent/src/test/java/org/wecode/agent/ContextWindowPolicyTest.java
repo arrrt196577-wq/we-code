@@ -3,6 +3,7 @@ package org.wecode.agent;
 import org.junit.jupiter.api.Test;
 import org.wecode.llm.model.Message;
 import org.wecode.llm.model.LlmResponse;
+import org.wecode.llm.model.Role;
 import org.wecode.llm.model.ToolCall;
 import org.wecode.llm.model.ToolSpec;
 import org.wecode.llm.model.FinishReason;
@@ -11,7 +12,9 @@ import org.wecode.tools.registry.ToolRegistry;
 import org.wecode.tools.spi.ToolContext;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -99,5 +102,48 @@ class ContextWindowPolicyTest {
         loop.run(session);
 
         assertTrue(observedUsage.get().estimatedInputTokens() > 0);
+    }
+
+    /** 验证外部消息来源会在每轮模型调用前重新读取，而不是被 AgentLoop 缓存在内存中。 */
+    @Test
+    void reloadsConversationMessagesBeforeEveryChat() {
+        ToolCall toolCall = new ToolCall("call-1", "missing", "{}");
+        List<List<Message>> requestedMessages = new ArrayList<>();
+        AtomicInteger loadCount = new AtomicInteger();
+        AgentLoop loop = new AgentLoop(
+                (messages, tools) -> {
+                    requestedMessages.add(messages);
+                    // 首轮要求工具调用；第二轮返回最终答案。
+                    if (requestedMessages.size() == 1) {
+                        return new LlmResponse(null, List.of(toolCall), FinishReason.TOOL_CALLS, null);
+                    }
+                    return new LlmResponse("完成", List.of(), FinishReason.STOP, null);
+                },
+                new ToolRegistry(),
+                ToolContext.of(Path.of(".")),
+                2,
+                null,
+                AgentExecutionListener.NO_OP
+        );
+        ConversationMessageProvider messageProvider = () -> {
+            // 第一次读取模拟首条持久化用户消息；第二次读取模拟数据库已经写入 assistant 与 tool 结果。
+            if (loadCount.getAndIncrement() == 0) {
+                return List.of(Message.system("固定规则"), Message.user("请执行任务"));
+            }
+            return List.of(
+                    Message.system("固定规则"),
+                    Message.user("请执行任务"),
+                    Message.assistant(null, List.of(toolCall), null),
+                    Message.tool("call-1", "Unknown tool: missing")
+            );
+        };
+
+        String result = loop.run(messageProvider);
+
+        assertEquals("完成", result);
+        assertEquals(2, loadCount.get());
+        assertEquals(2, requestedMessages.get(0).size());
+        assertEquals(4, requestedMessages.get(1).size());
+        assertEquals(Role.TOOL, requestedMessages.get(1).get(3).role());
     }
 }

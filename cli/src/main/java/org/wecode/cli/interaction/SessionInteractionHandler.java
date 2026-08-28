@@ -6,7 +6,6 @@ import org.wecode.agent.PromptBuilder;
 import org.wecode.llm.chat.ChatModel;
 import org.wecode.llm.model.LlmResponse;
 import org.wecode.llm.model.ToolCall;
-import org.wecode.session.Session;
 import org.wecode.session.SessionTitle;
 import org.wecode.session.persistence.SessionConversationStore;
 import org.wecode.session.persistence.entity.ToolExecutionRecord;
@@ -35,7 +34,6 @@ public final class SessionInteractionHandler implements InteractionHandler {
     private final ToolContext toolContext;
 
     private String activeSessionId;
-    private Session activeRuntimeSession;
 
     /**
      * @param conversationStore session 消息、标题和工具事件持久化入口
@@ -77,7 +75,6 @@ public final class SessionInteractionHandler implements InteractionHandler {
         } else {
             // 已绑定 session 时，后续输入只追加 user 消息，绝不再次生成标题。
             conversationStore.appendUserMessage(activeSessionId, userMessage);
-            activeRuntimeSession.append(org.wecode.llm.model.Message.user(userMessage));
         }
         return runAgentForActiveSession();
     }
@@ -116,7 +113,6 @@ public final class SessionInteractionHandler implements InteractionHandler {
                 temporaryTitle
         );
         activeSessionId = created.session().id();
-        activeRuntimeSession = created.runtimeSession();
 
         try {
             // 本 session 仅在这里调用一次标题模型；任何失败都保留临时标题且不影响 Agent。
@@ -136,7 +132,8 @@ public final class SessionInteractionHandler implements InteractionHandler {
                     toolContext,
                     new PersistingAgentExecutionListener(conversationStore, activeSessionId)
             );
-            String result = agentLoop.run(activeRuntimeSession);
+            // 每轮请求均从 SQLite 重建上下文，运行期不再读取内存会话历史。
+            String result = agentLoop.run(() -> conversationStore.loadMessagesForLlm(activeSessionId));
             conversationStore.markRunIdle(activeSessionId);
             return result;
         } catch (RuntimeException exception) {

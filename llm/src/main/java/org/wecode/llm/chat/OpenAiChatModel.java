@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.wecode.llm.model.FinishReason;
 import org.wecode.llm.model.LlmResponse;
+import org.wecode.llm.model.LlmUsage;
 import org.wecode.llm.model.Message;
 import org.wecode.llm.model.Role;
 import org.wecode.llm.model.ToolCall;
@@ -272,7 +273,16 @@ public final class OpenAiChatModel implements ChatModel {
         return httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     }
 
-    private LlmResponse parseResponse(String responseBody) throws IOException {
+    /**
+     * 解析 OpenAI Chat Completions 兼容响应。
+     * <p>
+     * 保持包可见仅供无网络单元测试直接验证响应映射。
+     *
+     * @param responseBody Provider 返回的完整 JSON 响应
+     * @return 映射后的领域响应
+     * @throws IOException 响应不是合法 JSON 时抛出
+     */
+    LlmResponse parseResponse(String responseBody) throws IOException {
         JsonNode root = objectMapper.readTree(responseBody);
         JsonNode choices = root.get("choices");
         // 没有 choices 时无法映射
@@ -299,7 +309,61 @@ public final class OpenAiChatModel implements ChatModel {
         if (thinkingOptions.shouldCaptureThinking()) {
             thinking = extractThinking(message, thinkingOptions.resolvedFieldName());
         }
-        return new LlmResponse(content, toolCalls, finishReason, thinking);
+        // usage 缺失或核心字段不完整时返回 null，不能影响已成功解析的模型回答。
+        LlmUsage usage = parseUsage(root.get("usage"));
+        return new LlmResponse(content, toolCalls, finishReason, thinking, usage);
+    }
+
+    /**
+     * 解析 OpenAI Chat Completions 兼容 usage，映射 DeepSeek 的缓存和推理明细。
+     *
+     * @param usageNode 响应根节点的 {@code usage}
+     * @return 核心统计完整时的用量；否则为 {@code null}
+     */
+    private static LlmUsage parseUsage(JsonNode usageNode) {
+        // Provider 未返回 usage，或返回值不是对象时，按不可用处理。
+        if (usageNode == null || usageNode.isNull() || !usageNode.isObject()) {
+            return null;
+        }
+        Long inputTokens = nonNegativeIntegralOrNull(usageNode.get("prompt_tokens"));
+        Long outputTokens = nonNegativeIntegralOrNull(usageNode.get("completion_tokens"));
+        Long totalTokens = nonNegativeIntegralOrNull(usageNode.get("total_tokens"));
+        // 三项核心统计不完整时不能构造半真半假的 usage。
+        if (inputTokens == null || outputTokens == null || totalTokens == null) {
+            return null;
+        }
+
+        JsonNode completionDetails = usageNode.get("completion_tokens_details");
+        Long reasoningTokens = completionDetails != null && completionDetails.isObject()
+                ? nonNegativeIntegralOrNull(completionDetails.get("reasoning_tokens"))
+                : null;
+        return new LlmUsage(
+                inputTokens,
+                outputTokens,
+                totalTokens,
+                nonNegativeIntegralOrNull(usageNode.get("prompt_cache_hit_tokens")),
+                nonNegativeIntegralOrNull(usageNode.get("prompt_cache_miss_tokens")),
+                reasoningTokens
+        );
+    }
+
+    /**
+     * 将一个 JSON 整数安全转换为非负 long；缺失、非整数、溢出或负数均视为不可用。
+     *
+     * @param node 待转换的 JSON 节点
+     * @return 合法的 token 数；否则为 {@code null}
+     */
+    private static Long nonNegativeIntegralOrNull(JsonNode node) {
+        // token 统计只能是可放入 long 的非负整数。
+        if (node == null || node.isNull() || !node.isIntegralNumber() || !node.canConvertToLong()) {
+            return null;
+        }
+        long value = node.longValue();
+        // 负数违反 token 用量语义，交由调用方按缺失处理。
+        if (value < 0) {
+            return null;
+        }
+        return value;
     }
 
     /**

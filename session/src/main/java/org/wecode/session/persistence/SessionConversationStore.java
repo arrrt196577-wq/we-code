@@ -6,7 +6,6 @@ import org.wecode.id.UuidV7IdGenerator;
 import org.wecode.llm.model.LlmResponse;
 import org.wecode.llm.model.Message;
 import org.wecode.llm.model.ToolCall;
-import org.wecode.session.Session;
 import org.wecode.session.SessionId;
 import org.wecode.session.SessionTitle;
 import org.wecode.session.persistence.entity.SessionMessageRecord;
@@ -20,6 +19,7 @@ import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
 import org.wecode.session.persistence.mapper.ToolExecutionPersistenceMapper;
 import org.wecode.session.persistence.payload.AssistantPayload;
+import org.wecode.session.persistence.payload.CompactionPayload;
 import org.wecode.session.persistence.payload.SessionMessagePayload;
 import org.wecode.session.persistence.payload.SessionPayloadCodec;
 import org.wecode.session.persistence.payload.SystemPayload;
@@ -28,7 +28,9 @@ import org.wecode.session.persistence.payload.UserPayload;
 
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -83,7 +85,7 @@ public final class SessionConversationStore {
      * @param promptVersion    system prompt 规则版本
      * @param firstUserMessage 首条用户消息原文
      * @param temporaryTitle   从首条用户消息生成的临时标题
-     * @return 已持久化的会话元数据与对应内存消息历史
+     * @return 已持久化的会话元数据
      */
     public CreatedSession createFromFirstUserMessage(
             WorkspaceRecord workspace,
@@ -132,10 +134,55 @@ public final class SessionConversationStore {
             );
             sqlSession.commit();
 
-            Session runtimeSession = new Session();
-            runtimeSession.append(systemPayload.toMessage());
-            runtimeSession.append(userPayload.toMessage());
-            return new CreatedSession(afterUser, runtimeSession);
+            return new CreatedSession(afterUser);
+        }
+    }
+
+    /**
+     * 从 SQLite 重建当前请求应发送给 LLM 的消息数组。
+     * <p>
+     * 始终保留会话最初持久化的 system prompt；存在 compaction 时，再注入最后一个
+     * compaction 摘要，并回放其覆盖边界之后的未压缩历史。消息顺序仅由 sequenceNo 决定。
+     *
+     * @param sessionId 会话标识
+     * @return 可直接传递给 {@code ChatModel} 的有序消息列表
+     */
+    public List<Message> loadMessagesForLlm(String sessionId) {
+        Objects.requireNonNull(sessionId, "sessionId");
+        try (SqlSession sqlSession = database.openSession()) {
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
+            ToolExecutionPersistenceMapper toolMapper = sqlSession.getMapper(ToolExecutionPersistenceMapper.class);
+            // 会话不存在时禁止返回空上下文，避免调用方误把错误会话当成新会话。
+            requireSession(sessionMapper, sessionId);
+            SessionMessageRecord latestCompaction = messageMapper.findLatestCompaction(sessionId);
+            List<Message> messages = new ArrayList<>();
+            long afterSequence = 0L;
+            List<SessionMessageRecord> history;
+
+            // 存在压缩节点时，固定规则和摘要必须先于未压缩尾部进入模型上下文。
+            if (latestCompaction != null) {
+                SessionMessageRecord initialSystem = requireInitialSystemMessage(
+                        messageMapper.findFirstSystemMessage(sessionId),
+                        sessionId
+                );
+                messages.add(toSystemMessage(initialSystem));
+                messages.add(toCompactionMessage(latestCompaction));
+                afterSequence = latestCompaction.compactsThroughSequence();
+                history = messageMapper.findAfterSequenceExcludingCompaction(sessionId, afterSequence);
+            } else {
+                // 没有压缩节点时，完整历史即为当前模型上下文。
+                history = messageMapper.findAllBySessionId(sessionId);
+            }
+
+            Map<String, List<ToolExecutionRecord>> executionsByAssistantMessage = groupExecutionsByAssistantMessage(
+                    toolMapper.findBySessionIdAfterSequence(sessionId, afterSequence)
+            );
+            // 按会话序号将持久化事件恢复为 OpenAI 兼容的 role 消息数组。
+            for (SessionMessageRecord record : history) {
+                appendContextMessage(messages, record, executionsByAssistantMessage);
+            }
+            return List.copyOf(messages);
         }
     }
 
@@ -404,6 +451,105 @@ public final class SessionConversationStore {
         return new AppendedMessage(updated, message);
     }
 
+    /** 将一条持久化事件追加为模型上下文；ASSISTANT 后紧跟其工具结果。 */
+    private void appendContextMessage(
+            List<Message> messages,
+            SessionMessageRecord record,
+            Map<String, List<ToolExecutionRecord>> executionsByAssistantMessage
+    ) {
+        SessionMessagePayload payload = payloadCodec.decodeMessage(record);
+        switch (record.messageType()) {
+            case SYSTEM -> messages.add(toSystemMessage(record));
+            case USER -> messages.add(((UserPayload) payload).toMessage());
+            case ASSISTANT -> appendAssistantContext(
+                    messages,
+                    (AssistantPayload) payload,
+                    executionsByAssistantMessage.getOrDefault(record.id(), List.of())
+            );
+            // 已选取的最新压缩消息会在历史尾部之前单独注入，其他压缩节点必须被排除。
+            case COMPACTION -> throw new IllegalStateException(
+                    "Compaction message must not appear in uncompressed LLM history: " + record.id()
+            );
+        }
+    }
+
+    /** 解码并校验会话创建时保存的固定 system prompt。 */
+    private Message toSystemMessage(SessionMessageRecord record) {
+        SessionMessagePayload payload = payloadCodec.decodeMessage(record);
+        if (!(payload instanceof SystemPayload systemPayload)) {
+            throw new IllegalStateException("Expected SYSTEM payload: " + record.id());
+        }
+        return systemPayload.toMessage();
+    }
+
+    /** 解码最新 compaction 摘要，并以受控 system 上下文回灌。 */
+    private Message toCompactionMessage(SessionMessageRecord record) {
+        SessionMessagePayload payload = payloadCodec.decodeMessage(record);
+        if (!(payload instanceof CompactionPayload compactionPayload)) {
+            throw new IllegalStateException("Expected COMPACTION payload: " + record.id());
+        }
+        return compactionPayload.toContextMessage();
+    }
+
+    /** 还原 assistant 调用及其已完成的工具 observation，确保 LLM 工具协议完整。 */
+    private void appendAssistantContext(
+            List<Message> messages,
+            AssistantPayload payload,
+            List<ToolExecutionRecord> executions
+    ) {
+        List<ToolCall> toolCalls = executions.stream()
+                .map(execution -> new ToolCall(
+                        execution.callId(),
+                        execution.toolName(),
+                        execution.argumentsJson()
+                ))
+                .toList();
+        messages.add(payload.toMessage(toolCalls));
+
+        for (ToolExecutionRecord execution : executions) {
+            // 未完成或副作用不确定的工具调用不能伪造为可继续的模型上下文。
+            if (execution.status() != ToolExecutionStatus.SUCCEEDED
+                    && execution.status() != ToolExecutionStatus.FAILED) {
+                throw new IllegalStateException(
+                        "Cannot build LLM context from incomplete tool execution: "
+                                + execution.id() + " status=" + execution.status()
+                );
+            }
+            if (execution.resultJson() == null || execution.resultPayloadVersion() == null) {
+                throw new IllegalStateException(
+                        "Completed tool execution is missing persisted result: " + execution.id()
+                );
+            }
+            ToolExecutionResultPayload result = payloadCodec.decodeToolResult(
+                    execution.resultPayloadVersion(),
+                    execution.resultJson()
+            );
+            messages.add(result.toMessage(execution.callId()));
+        }
+    }
+
+    /** 按 assistant 消息分组批量读取到的工具记录，保留 SQL 已保证的调用顺序。 */
+    private static Map<String, List<ToolExecutionRecord>> groupExecutionsByAssistantMessage(
+            List<ToolExecutionRecord> executions
+    ) {
+        Map<String, List<ToolExecutionRecord>> grouped = new HashMap<>();
+        for (ToolExecutionRecord execution : executions) {
+            grouped.computeIfAbsent(execution.assistantMessageId(), ignored -> new ArrayList<>()).add(execution);
+        }
+        return grouped;
+    }
+
+    /** 读取并校验压缩场景仍可用的首条固定 system 消息。 */
+    private static SessionMessageRecord requireInitialSystemMessage(
+            SessionMessageRecord initialSystem,
+            String sessionId
+    ) {
+        if (initialSystem == null) {
+            throw new IllegalStateException("session has no initial system message: " + sessionId);
+        }
+        return initialSystem;
+    }
+
     /** 读取必须存在的会话，禁止静默向不存在会话写入数据。 */
     private static SessionRecord requireSession(SessionPersistenceMapper mapper, String sessionId) {
         Objects.requireNonNull(sessionId, "sessionId");
@@ -426,13 +572,12 @@ public final class SessionConversationStore {
         return clock.millis();
     }
 
-    /** 首条用户消息创建完成后的持久化状态与运行时消息历史。 */
-    public record CreatedSession(SessionRecord session, Session runtimeSession) {
+    /** 首条用户消息创建完成后的持久化状态。 */
+    public record CreatedSession(SessionRecord session) {
 
-        /** 校验创建结果完整可供 Agent 继续使用。 */
+        /** 校验创建结果包含已持久化的会话元数据。 */
         public CreatedSession {
             Objects.requireNonNull(session, "session");
-            Objects.requireNonNull(runtimeSession, "runtimeSession");
         }
     }
 
