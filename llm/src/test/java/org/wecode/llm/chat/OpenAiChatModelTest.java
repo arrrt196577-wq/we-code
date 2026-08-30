@@ -64,6 +64,21 @@ class OpenAiChatModelTest {
         assertTrue(body.contains("\"temperature\":0.2"));
     }
 
+    /** 验证调用方指定输出预算时，OpenAI 兼容请求体携带 max_tokens。 */
+    @Test
+    void buildRequestBodyIncludesRequestedMaxOutputTokens() throws Exception {
+        OpenAiChatModel openAi = createTestModel();
+
+        String body = openAi.buildRequestBody(
+                List.of(Message.user("生成摘要")),
+                List.of(),
+                ChatRequestOptions.withMaxOutputTokens(2_048)
+        );
+
+        assertTrue(body.contains("\"max_tokens\":2048"));
+        assertFalse(body.contains("\"tools\""));
+    }
+
     @Test
     void buildRequestBodyIncludesThinkingAndOmitsTemperature() throws Exception {
         OpenAiChatModel openAi = new OpenAiChatModel(

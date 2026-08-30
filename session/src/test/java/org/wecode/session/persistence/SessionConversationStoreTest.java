@@ -16,6 +16,8 @@ import org.wecode.session.persistence.entity.SessionStatus;
 import org.wecode.session.persistence.entity.SessionTitleSource;
 import org.wecode.session.persistence.entity.WorkspaceRecord;
 import org.wecode.session.persistence.entity.WorkspaceType;
+import org.wecode.session.persistence.entity.ToolExecutionStatus;
+import org.wecode.session.persistence.compaction.CompactionTranscript;
 import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
 import org.wecode.session.persistence.mapper.WorkspacePersistenceMapper;
@@ -153,6 +155,54 @@ class SessionConversationStoreTest {
         assertEquals("请比较这两个文件。", messages.get(5).content());
     }
 
+    /** 验证摘要源保留 assistant reasoning、工具参数、工具结果及其成功/失败状态。 */
+    @Test
+    void loadsStructuredCompactionTranscript() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        WorkspaceRecord workspace = insertWorkspace(database);
+        SessionConversationStore store = new SessionConversationStore(database);
+        SessionConversationStore.CreatedSession created = store.createFromFirstUserMessage(
+                workspace,
+                "固定 system prompt",
+                "v1",
+                "请读取配置文件。",
+                "读取配置文件"
+        );
+        SessionConversationStore.PersistedAssistant persisted = store.appendAssistantResponse(
+                created.session().id(),
+                new LlmResponse(
+                        "准备读取两个文件。",
+                        List.of(
+                                new ToolCall("call-1", "Read", "{\"path\":\"one.txt\"}"),
+                                new ToolCall("call-2", "Read", "{\"path\":\"two.txt\"}")
+                        ),
+                        FinishReason.TOOL_CALLS,
+                        "需要比较两个文件的配置差异。"
+                )
+        );
+        var firstClaimed = store.claimToolExecution(persisted.executions().get(0));
+        store.completeToolExecution(firstClaimed, "第一个文件内容", false);
+        var secondClaimed = store.claimToolExecution(persisted.executions().get(1));
+        store.completeToolExecution(secondClaimed, "第二个文件读取失败", true);
+        store.appendUserMessage(created.session().id(), "请说明差异。 ");
+
+        CompactionTranscript transcript = store.loadCompactionTranscript(created.session().id());
+
+        assertEquals(null, transcript.previousSummary());
+        assertEquals(3, transcript.entries().size());
+        assertEquals("请读取配置文件。", ((CompactionTranscript.UserEntry) transcript.entries().get(0)).content());
+        CompactionTranscript.AssistantEntry assistant =
+                (CompactionTranscript.AssistantEntry) transcript.entries().get(1);
+        assertEquals("准备读取两个文件。", assistant.content());
+        assertEquals("需要比较两个文件的配置差异。", assistant.reasoningContent());
+        assertEquals(2, assistant.toolExecutions().size());
+        assertEquals(ToolExecutionStatus.SUCCEEDED, assistant.toolExecutions().get(0).status());
+        assertEquals("第一个文件内容", assistant.toolExecutions().get(0).resultContent());
+        assertEquals(ToolExecutionStatus.FAILED, assistant.toolExecutions().get(1).status());
+        assertEquals("第二个文件读取失败", assistant.toolExecutions().get(1).resultContent());
+        assertEquals("请说明差异。 ", ((CompactionTranscript.UserEntry) transcript.entries().get(2)).content());
+    }
+
     /** 验证已有 compaction 时保留固定 system、注入摘要并回放未覆盖的历史尾部。 */
     @Test
     void loadsInitialSystemCompactionAndUncompressedTailForLlm() {
@@ -176,6 +226,29 @@ class SessionConversationStoreTest {
         assertEquals("固定 system prompt", messages.get(0).content());
         assertEquals("历史摘要：需求分析已经完成。", messages.get(1).content());
         assertEquals("请开始编码。", messages.get(2).content());
+    }
+
+    /** 验证既有 compaction 的摘要单独作为旧锚点返回，尾部历史不混入旧检查点事件。 */
+    @Test
+    void loadsPreviousSummaryAndUncompressedTailForCompactionTranscript() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        WorkspaceRecord workspace = insertWorkspace(database);
+        SessionConversationStore store = new SessionConversationStore(database);
+        SessionConversationStore.CreatedSession created = store.createFromFirstUserMessage(
+                workspace,
+                "固定 system prompt",
+                "v1",
+                "已经完成需求分析。",
+                "完成需求分析"
+        );
+        appendCompaction(database, created.session().id(), "历史摘要：需求分析已经完成。");
+        store.appendUserMessage(created.session().id(), "请开始编码。 ");
+
+        CompactionTranscript transcript = store.loadCompactionTranscript(created.session().id());
+
+        assertEquals("历史摘要：需求分析已经完成。", transcript.previousSummary());
+        assertEquals(1, transcript.entries().size());
+        assertEquals("请开始编码。 ", ((CompactionTranscript.UserEntry) transcript.entries().get(0)).content());
     }
 
     /** 验证缺少终态工具结果的 assistant 历史不能被伪造成合法 LLM 请求。 */
@@ -202,6 +275,7 @@ class SessionConversationStoreTest {
         );
 
         assertThrows(IllegalStateException.class, () -> store.loadMessagesForLlm(created.session().id()));
+        assertThrows(IllegalStateException.class, () -> store.loadCompactionTranscript(created.session().id()));
     }
 
     /** 在不实现压缩策略的前提下，写入一条满足既有数据库约束的 compaction 检查点。 */

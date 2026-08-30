@@ -54,3 +54,4 @@ TOPSECRET
 docs/*
 !docs/diagrams/
 !docs/diagrams/**
+!docs/compaction-roadmap.md

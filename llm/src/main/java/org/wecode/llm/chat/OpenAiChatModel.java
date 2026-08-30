@@ -145,11 +145,17 @@ public final class OpenAiChatModel implements ChatModel {
 
     @Override
     public LlmResponse chat(List<Message> messages, List<ToolSpec> tools) {
+        return chat(messages, tools, ChatRequestOptions.defaults());
+    }
+
+    @Override
+    public LlmResponse chat(List<Message> messages, List<ToolSpec> tools, ChatRequestOptions options) {
         Objects.requireNonNull(messages, "messages");
+        Objects.requireNonNull(options, "options");
         // tools 允许 null，按空列表处理
         List<ToolSpec> toolSpecs = tools == null ? List.of() : tools;
         try {
-            String body = buildRequestBody(messages, toolSpecs);
+            String body = buildRequestBody(messages, toolSpecs, options);
             HttpResponse<String> response = postChatCompletion(body);
             // 非 2xx：带上状态码与响应片段，方便排查中转站
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -175,9 +181,31 @@ public final class OpenAiChatModel implements ChatModel {
 
     /** 组装请求 JSON（同包测试可直接断言；非流式）。 */
     String buildRequestBody(List<Message> messages, List<ToolSpec> tools) throws IOException {
+        return buildRequestBody(messages, tools, ChatRequestOptions.defaults());
+    }
+
+    /**
+     * 组装带单次请求选项的 JSON 请求体。
+     *
+     * @param messages 当前请求消息
+     * @param tools    当前请求工具定义
+     * @param options  单次请求选项
+     * @return OpenAI Chat Completions 兼容 JSON
+     * @throws IOException 工具参数 JSON 非法时抛出
+     */
+    String buildRequestBody(
+            List<Message> messages,
+            List<ToolSpec> tools,
+            ChatRequestOptions options
+    ) throws IOException {
+        Objects.requireNonNull(options, "options");
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", model);
         root.put("stream", false);
+        // 摘要等内部调用可覆盖输出上限；未设置时不改变既有 Provider 请求体。
+        if (options.maxOutputTokens() != null) {
+            root.put("max_tokens", options.maxOutputTokens());
+        }
         // 有温度才写入，避免部分模型拒收 null
         if (temperature != null && !thinkingOptions.shouldCaptureThinking()) {
             root.put("temperature", temperature);

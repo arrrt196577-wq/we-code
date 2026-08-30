@@ -15,6 +15,7 @@ import org.wecode.session.persistence.entity.SessionTitleSource;
 import org.wecode.session.persistence.entity.ToolExecutionRecord;
 import org.wecode.session.persistence.entity.ToolExecutionStatus;
 import org.wecode.session.persistence.entity.WorkspaceRecord;
+import org.wecode.session.persistence.compaction.CompactionTranscript;
 import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
 import org.wecode.session.persistence.mapper.ToolExecutionPersistenceMapper;
@@ -183,6 +184,49 @@ public final class SessionConversationStore {
                 appendContextMessage(messages, record, executionsByAssistantMessage);
             }
             return List.copyOf(messages);
+        }
+    }
+
+    /**
+     * 读取供摘要模型使用的结构化原始历史。
+     * <p>
+     * 固定 system prompt 不属于可压缩历史。存在既有检查点时，旧摘要单独返回，且仅读取其覆盖边界
+     * 之后的原始 USER、ASSISTANT 与工具执行事实。
+     *
+     * @param sessionId 会话标识
+     * @return 按会话顺序构造的摘要源；不产生数据库写入
+     */
+    public CompactionTranscript loadCompactionTranscript(String sessionId) {
+        Objects.requireNonNull(sessionId, "sessionId");
+        try (SqlSession sqlSession = database.openSession()) {
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
+            ToolExecutionPersistenceMapper toolMapper = sqlSession.getMapper(ToolExecutionPersistenceMapper.class);
+            // 会话不存在时拒绝构造空摘要源，避免调用方误判为无历史。
+            requireSession(sessionMapper, sessionId);
+            SessionMessageRecord latestCompaction = messageMapper.findLatestCompaction(sessionId);
+            long afterSequence = 0L;
+            String previousSummary = null;
+            List<SessionMessageRecord> history;
+
+            if (latestCompaction != null) {
+                CompactionPayload payload = requireCompactionPayload(latestCompaction);
+                previousSummary = payload.renderedMemory();
+                afterSequence = latestCompaction.compactsThroughSequence();
+                history = messageMapper.findAfterSequenceExcludingCompaction(sessionId, afterSequence);
+            } else {
+                // 首次压缩时从完整原始会话中筛除固定 system prompt。
+                history = messageMapper.findAllBySessionId(sessionId);
+            }
+
+            Map<String, List<ToolExecutionRecord>> executionsByAssistantMessage = groupExecutionsByAssistantMessage(
+                    toolMapper.findBySessionIdAfterSequence(sessionId, afterSequence)
+            );
+            List<CompactionTranscript.Entry> entries = new ArrayList<>();
+            for (SessionMessageRecord record : history) {
+                appendCompactionTranscriptEntry(entries, record, executionsByAssistantMessage);
+            }
+            return new CompactionTranscript(previousSummary, entries);
         }
     }
 
@@ -484,11 +528,90 @@ public final class SessionConversationStore {
 
     /** 解码最新 compaction 摘要，并以受控 system 上下文回灌。 */
     private Message toCompactionMessage(SessionMessageRecord record) {
+        return requireCompactionPayload(record).toContextMessage();
+    }
+
+    /** 解码并校验一条 compaction 消息的持久化载荷。 */
+    private CompactionPayload requireCompactionPayload(SessionMessageRecord record) {
         SessionMessagePayload payload = payloadCodec.decodeMessage(record);
         if (!(payload instanceof CompactionPayload compactionPayload)) {
             throw new IllegalStateException("Expected COMPACTION payload: " + record.id());
         }
-        return compactionPayload.toContextMessage();
+        return compactionPayload;
+    }
+
+    /** 将一条持久化历史事件转换为摘要输入条目，固定 system 与旧 compaction 均不参与摘要。 */
+    private void appendCompactionTranscriptEntry(
+            List<CompactionTranscript.Entry> entries,
+            SessionMessageRecord record,
+            Map<String, List<ToolExecutionRecord>> executionsByAssistantMessage
+    ) {
+        SessionMessagePayload payload = payloadCodec.decodeMessage(record);
+        switch (record.messageType()) {
+            case SYSTEM -> {
+                // 固定规则会在后续请求中继续注入，不应被模型摘要改写。
+            }
+            case USER -> entries.add(new CompactionTranscript.UserEntry(
+                    record.sequenceNo(),
+                    ((UserPayload) payload).content()
+            ));
+            case ASSISTANT -> {
+                AssistantPayload assistantPayload = (AssistantPayload) payload;
+                List<ToolExecutionRecord> executions = executionsByAssistantMessage.getOrDefault(record.id(), List.of());
+                List<ToolCall> toolCalls = executions.stream()
+                        .map(execution -> new ToolCall(
+                                execution.callId(),
+                                execution.toolName(),
+                                execution.argumentsJson()
+                        ))
+                        .toList();
+                // 复用正常上下文恢复时的工具协议校验，防止损坏历史绕过摘要路径。
+                assistantPayload.toMessage(toolCalls);
+                entries.add(new CompactionTranscript.AssistantEntry(
+                        record.sequenceNo(),
+                        assistantPayload.content(),
+                        assistantPayload.reasoningContent(),
+                        toCompactionToolExecutions(executions)
+                ));
+            }
+            case COMPACTION -> throw new IllegalStateException(
+                    "Compaction message must not appear in compaction transcript history: " + record.id()
+            );
+        }
+    }
+
+    /** 将终态工具执行记录转换为带成功/失败事实的摘要源条目。 */
+    private List<CompactionTranscript.ToolExecutionEntry> toCompactionToolExecutions(
+            List<ToolExecutionRecord> executions
+    ) {
+        List<CompactionTranscript.ToolExecutionEntry> entries = new ArrayList<>();
+        for (ToolExecutionRecord execution : executions) {
+            // 未完成或副作用不确定的调用不能进入摘要，否则会把猜测固化为历史事实。
+            if (execution.status() != ToolExecutionStatus.SUCCEEDED
+                    && execution.status() != ToolExecutionStatus.FAILED) {
+                throw new IllegalStateException(
+                        "Cannot build compaction transcript from incomplete tool execution: "
+                                + execution.id() + " status=" + execution.status()
+                );
+            }
+            if (execution.resultJson() == null || execution.resultPayloadVersion() == null) {
+                throw new IllegalStateException(
+                        "Completed tool execution is missing persisted result: " + execution.id()
+                );
+            }
+            ToolExecutionResultPayload result = payloadCodec.decodeToolResult(
+                    execution.resultPayloadVersion(),
+                    execution.resultJson()
+            );
+            entries.add(new CompactionTranscript.ToolExecutionEntry(
+                    execution.callId(),
+                    execution.toolName(),
+                    execution.argumentsJson(),
+                    execution.status(),
+                    result.content()
+            ));
+        }
+        return List.copyOf(entries);
     }
 
     /** 还原 assistant 调用及其已完成的工具 observation，确保 LLM 工具协议完整。 */
