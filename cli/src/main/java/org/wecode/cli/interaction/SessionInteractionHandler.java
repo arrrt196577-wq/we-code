@@ -3,6 +3,8 @@ package org.wecode.cli.interaction;
 import org.wecode.agent.AgentExecutionListener;
 import org.wecode.agent.AgentLoop;
 import org.wecode.agent.PromptBuilder;
+import org.wecode.agent.compaction.CompactionResult;
+import org.wecode.agent.compaction.CompactionService;
 import org.wecode.llm.chat.ChatModel;
 import org.wecode.llm.model.LlmResponse;
 import org.wecode.llm.model.ToolCall;
@@ -32,6 +34,7 @@ public final class SessionInteractionHandler implements InteractionHandler {
     private final ChatModel chatModel;
     private final ToolRegistry toolRegistry;
     private final ToolContext toolContext;
+    private final CompactionService compactionService;
 
     private String activeSessionId;
 
@@ -42,6 +45,7 @@ public final class SessionInteractionHandler implements InteractionHandler {
      * @param chatModel         当前激活 Provider 的模型
      * @param toolRegistry      本轮 Agent 可调用的工具
      * @param toolContext       当前工作区工具访问边界
+     * @param compactionService 当前会话历史压缩服务
      */
     public SessionInteractionHandler(
             SessionConversationStore conversationStore,
@@ -49,7 +53,8 @@ public final class SessionInteractionHandler implements InteractionHandler {
             TitleGenerator titleGenerator,
             ChatModel chatModel,
             ToolRegistry toolRegistry,
-            ToolContext toolContext
+            ToolContext toolContext,
+            CompactionService compactionService
     ) {
         this.conversationStore = Objects.requireNonNull(conversationStore, "conversationStore");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
@@ -58,6 +63,7 @@ public final class SessionInteractionHandler implements InteractionHandler {
         this.chatModel = Objects.requireNonNull(chatModel, "chatModel");
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry");
         this.toolContext = Objects.requireNonNull(toolContext, "toolContext");
+        this.compactionService = Objects.requireNonNull(compactionService, "compactionService");
     }
 
     /**
@@ -92,6 +98,20 @@ public final class SessionInteractionHandler implements InteractionHandler {
             throw new IllegalStateException("当前没有活动会话，无法重命名。");
         }
         conversationStore.renameTitle(activeSessionId, title);
+    }
+
+    /**
+     * 委托压缩服务处理当前活动会话，命令层不直接接触持久化细节。
+     *
+     * @return 压缩服务返回的领域结果
+     */
+    @Override
+    public CompactionResult compactActiveSession() {
+        // 防御式校验保证非 CLI 调用者也不会将空会话标识交给压缩服务。
+        if (activeSessionId == null) {
+            throw new IllegalStateException("当前没有活动会话，无法压缩。");
+        }
+        return compactionService.compact(activeSessionId);
     }
 
     /**

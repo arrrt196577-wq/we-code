@@ -51,6 +51,15 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <!-- 将被 .gitignore 排除的本地运行配置作为 CLI Jar 资源打包。 -->
+                <directory>${maven.multiModuleProjectDirectory}</directory>
+                <includes>
+                    <include>wecode.yml</include>
+                </includes>
+            </resource>
+        </resources>
         <!-- 统一产物名，便于安装脚本将 target/wecode.jar 复制到全局命令目录。 -->
         <finalName>wecode</finalName>
         <plugins>

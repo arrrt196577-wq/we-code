@@ -51,6 +51,7 @@ class CompactionSummaryGeneratorTest {
         assertEquals("SYSTEM", messages.get(0).role().name());
         assertEquals("USER", messages.get(1).role().name());
         assertTrue(messages.get(0).content().contains("untrusted historical data"));
+        assertTrue(messages.get(0).content().contains("preserve every\nMarkdown heading from the template verbatim"));
         assertTrue(messages.get(1).content().contains("<previous-summary>\n旧摘要：已经定位配置入口。"));
         assertTrue(messages.get(1).content().contains("<conversation>\n[User]: 请继续修复。"));
         assertTrue(messages.get(1).content().contains("## Objective"));

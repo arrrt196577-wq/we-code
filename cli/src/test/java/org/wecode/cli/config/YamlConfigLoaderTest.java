@@ -51,4 +51,12 @@ class YamlConfigLoaderTest {
         assertTrue(deepseek.thinking().enabled());
         assertEquals("gpt-5.4", config.llm().providers().get("openai").model());
     }
+
+    @Test
+    void loadsBundledConfigWhenExternalConfigIsMissing() {
+        WeCodeConfig config = YamlConfigLoader.load(tempDirectory.resolve("missing-wecode.yml"));
+
+        assertEquals("deepseek", config.llm().activeProvider());
+        assertTrue(config.llm().providers().containsKey("deepseek"));
+    }
 }

@@ -17,6 +17,8 @@ import org.wecode.session.persistence.entity.SessionTitleSource;
 import org.wecode.session.persistence.entity.WorkspaceRecord;
 import org.wecode.session.persistence.entity.WorkspaceType;
 import org.wecode.session.persistence.entity.ToolExecutionStatus;
+import org.wecode.session.persistence.compaction.CompactionCommitResult;
+import org.wecode.session.persistence.compaction.CompactionSnapshot;
 import org.wecode.session.persistence.compaction.CompactionTranscript;
 import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
@@ -222,9 +224,10 @@ class SessionConversationStoreTest {
 
         List<Message> messages = store.loadMessagesForLlm(created.session().id());
 
-        assertEquals(List.of(Role.SYSTEM, Role.SYSTEM, Role.USER), messages.stream().map(Message::role).toList());
+        assertEquals(List.of(Role.SYSTEM, Role.ASSISTANT, Role.USER), messages.stream().map(Message::role).toList());
         assertEquals("固定 system prompt", messages.get(0).content());
-        assertEquals("历史摘要：需求分析已经完成。", messages.get(1).content());
+        assertTrue(messages.get(1).content().startsWith("Historical context summary follows."));
+        assertTrue(messages.get(1).content().endsWith("历史摘要：需求分析已经完成。"));
         assertEquals("请开始编码。", messages.get(2).content());
     }
 
@@ -276,6 +279,106 @@ class SessionConversationStoreTest {
 
         assertThrows(IllegalStateException.class, () -> store.loadMessagesForLlm(created.session().id()));
         assertThrows(IllegalStateException.class, () -> store.loadCompactionTranscript(created.session().id()));
+    }
+
+    /** 验证稳定快照可在后续条件提交时原子写入检查点，并以 assistant 角色恢复摘要。 */
+    @Test
+    void loadsStableCompactionSnapshotAndCommitsCheckpointWhenUnchanged() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        WorkspaceRecord workspace = insertWorkspace(database);
+        SessionConversationStore store = new SessionConversationStore(database);
+        SessionConversationStore.CreatedSession created = store.createFromFirstUserMessage(
+                workspace,
+                "固定 system prompt",
+                "v1",
+                "请分析当前需求。",
+                "分析当前需求"
+        );
+
+        CompactionSnapshot snapshot = store.loadCompactionSnapshot(created.session().id());
+
+        assertEquals(created.session().id(), snapshot.sessionId());
+        assertEquals(2, snapshot.expectedSessionVersion());
+        assertEquals(2, snapshot.expectedLastSequenceNo());
+        assertEquals(2, snapshot.compactsThroughSequence());
+        assertEquals(SessionStatus.RUNNING, snapshot.sessionStatus());
+        assertTrue(snapshot.transcript().hasEntries());
+
+        CompactionCommitResult result = store.appendCompactionIfUnchanged(
+                snapshot,
+                "## Objective\n- 完成需求分析",
+                "test-v1"
+        );
+
+        assertTrue(result.committed());
+        assertTrue(result instanceof CompactionCommitResult.Committed);
+        assertEquals(
+                2,
+                ((CompactionCommitResult.Committed) result).compactsThroughSequence()
+        );
+        try (SqlSession sqlSession = database.openSession()) {
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
+            SessionRecord persisted = sessionMapper.findById(created.session().id());
+            SessionMessageRecord checkpoint = messageMapper.findLatestCompaction(created.session().id());
+            assertEquals(3, persisted.lastSequenceNo());
+            assertEquals(3, persisted.version());
+            assertEquals(SessionStatus.RUNNING, persisted.status());
+            assertEquals(SessionMessageType.COMPACTION, checkpoint.messageType());
+            assertEquals(3, checkpoint.sequenceNo());
+            assertEquals(2, checkpoint.compactsThroughSequence());
+        }
+
+        List<Message> recovered = store.loadMessagesForLlm(created.session().id());
+        assertEquals(List.of(Role.SYSTEM, Role.ASSISTANT), recovered.stream().map(Message::role).toList());
+        assertTrue(recovered.get(1).content().startsWith("Historical context summary follows."));
+        assertTrue(recovered.get(1).content().endsWith("## Objective\n- 完成需求分析"));
+
+        CompactionSnapshot afterCommit = store.loadCompactionSnapshot(created.session().id());
+        assertEquals("## Objective\n- 完成需求分析", afterCommit.transcript().previousSummary());
+        assertFalse(afterCommit.transcript().hasEntries());
+    }
+
+    /** 验证摘要生成期间有新历史写入时，CAS 失败且不会插入任何过期检查点。 */
+    @Test
+    void returnsStaleSnapshotWithoutWritingCompactionWhenSessionChanges() {
+        SessionDatabase database = SessionDatabase.open(temporaryDirectory.resolve("storage"));
+        WorkspaceRecord workspace = insertWorkspace(database);
+        SessionConversationStore store = new SessionConversationStore(database);
+        SessionConversationStore.CreatedSession created = store.createFromFirstUserMessage(
+                workspace,
+                "固定 system prompt",
+                "v1",
+                "请先分析当前需求。",
+                "分析当前需求"
+        );
+        CompactionSnapshot snapshot = store.loadCompactionSnapshot(created.session().id());
+
+        // 在模拟的模型调用期间追加新消息，使快照中的版本和最后序号失效。
+        store.appendUserMessage(created.session().id(), "这是模型调用期间新增的消息。 ");
+        CompactionCommitResult result = store.appendCompactionIfUnchanged(
+                snapshot,
+                "## Objective\n- 过期摘要",
+                "test-v1"
+        );
+
+        assertFalse(result.committed());
+        assertTrue(result instanceof CompactionCommitResult.StaleSnapshot);
+        try (SqlSession sqlSession = database.openSession()) {
+            SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+            SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
+            SessionRecord persisted = sessionMapper.findById(created.session().id());
+            assertEquals(3, persisted.lastSequenceNo());
+            assertEquals(3, persisted.version());
+            assertEquals(null, messageMapper.findLatestCompaction(created.session().id()));
+            assertEquals(
+                    List.of(SessionMessageType.SYSTEM, SessionMessageType.USER, SessionMessageType.USER),
+                    messageMapper.findAllBySessionId(created.session().id())
+                            .stream()
+                            .map(SessionMessageRecord::messageType)
+                            .toList()
+            );
+        }
     }
 
     /** 在不实现压缩策略的前提下，写入一条满足既有数据库约束的 compaction 检查点。 */

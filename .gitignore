@@ -55,3 +55,4 @@ docs/*
 !docs/diagrams/
 !docs/diagrams/**
 !docs/compaction-roadmap.md
+!docs/pending-improvements.md

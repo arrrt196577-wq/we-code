@@ -9,12 +9,15 @@ import org.wecode.llm.model.ToolCall;
 import org.wecode.session.SessionId;
 import org.wecode.session.SessionTitle;
 import org.wecode.session.persistence.entity.SessionMessageRecord;
+import org.wecode.session.persistence.entity.SessionMessageType;
 import org.wecode.session.persistence.entity.SessionRecord;
 import org.wecode.session.persistence.entity.SessionStatus;
 import org.wecode.session.persistence.entity.SessionTitleSource;
 import org.wecode.session.persistence.entity.ToolExecutionRecord;
 import org.wecode.session.persistence.entity.ToolExecutionStatus;
 import org.wecode.session.persistence.entity.WorkspaceRecord;
+import org.wecode.session.persistence.compaction.CompactionCommitResult;
+import org.wecode.session.persistence.compaction.CompactionSnapshot;
 import org.wecode.session.persistence.compaction.CompactionTranscript;
 import org.wecode.session.persistence.mapper.SessionMessagePersistenceMapper;
 import org.wecode.session.persistence.mapper.SessionPersistenceMapper;
@@ -156,6 +159,7 @@ public final class SessionConversationStore {
             ToolExecutionPersistenceMapper toolMapper = sqlSession.getMapper(ToolExecutionPersistenceMapper.class);
             // 会话不存在时禁止返回空上下文，避免调用方误把错误会话当成新会话。
             requireSession(sessionMapper, sessionId);
+            // 找到最后一个compaction节点，作为历史回放的边界；不存在时回放完整历史。
             SessionMessageRecord latestCompaction = messageMapper.findLatestCompaction(sessionId);
             List<Message> messages = new ArrayList<>();
             long afterSequence = 0L;
@@ -197,13 +201,26 @@ public final class SessionConversationStore {
      * @return 按会话顺序构造的摘要源；不产生数据库写入
      */
     public CompactionTranscript loadCompactionTranscript(String sessionId) {
+        return loadCompactionSnapshot(sessionId).transcript();
+    }
+
+    /**
+     * 读取供一次摘要生成和后续条件提交使用的稳定会话快照。
+     * <p>
+     * 此方法只在短暂的只读数据库会话中读取会话版本、序号和摘要源；返回后数据库会话已关闭，
+     * 调用方必须在该方法返回后才调用模型，避免跨模型调用持有 SQLite 事务。
+     *
+     * @param sessionId 会话标识
+     * @return 包含乐观锁条件、压缩边界和结构化历史的稳定快照
+     */
+    public CompactionSnapshot loadCompactionSnapshot(String sessionId) {
         Objects.requireNonNull(sessionId, "sessionId");
         try (SqlSession sqlSession = database.openSession()) {
             SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
             SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
             ToolExecutionPersistenceMapper toolMapper = sqlSession.getMapper(ToolExecutionPersistenceMapper.class);
             // 会话不存在时拒绝构造空摘要源，避免调用方误判为无历史。
-            requireSession(sessionMapper, sessionId);
+            SessionRecord current = requireSession(sessionMapper, sessionId);
             SessionMessageRecord latestCompaction = messageMapper.findLatestCompaction(sessionId);
             long afterSequence = 0L;
             String previousSummary = null;
@@ -226,7 +243,80 @@ public final class SessionConversationStore {
             for (SessionMessageRecord record : history) {
                 appendCompactionTranscriptEntry(entries, record, executionsByAssistantMessage);
             }
-            return new CompactionTranscript(previousSummary, entries);
+            CompactionTranscript transcript = new CompactionTranscript(previousSummary, entries);
+            // 第一期不保留未压缩尾部，因此检查点覆盖读取快照时的全部既有事件。
+            return new CompactionSnapshot(
+                    current.id(),
+                    current.version(),
+                    current.lastSequenceNo(),
+                    current.lastSequenceNo(),
+                    current.status(),
+                    transcript
+            );
+        }
+    }
+
+    /**
+     * 仅当会话仍保持读取快照时的版本与最后序号时，原子追加一条压缩检查点。
+     * <p>
+     * 条件不命中时不会写入任何记录，并返回过期快照；摘要模型调用不属于本方法，故该事务不会跨越模型调用。
+     *
+     * @param snapshot        摘要生成前读取的稳定快照
+     * @param summaryContent  已通过调用方校验的摘要正文
+     * @param strategyVersion 生成摘要时使用的策略版本
+     * @return 已提交的压缩边界，或表示未写入的过期快照结果
+     */
+    public CompactionCommitResult appendCompactionIfUnchanged(
+            CompactionSnapshot snapshot,
+            String summaryContent,
+            String strategyVersion
+    ) {
+        snapshot = Objects.requireNonNull(snapshot, "snapshot");
+        // 没有早于检查点的历史事件时，数据库约束不允许创建 compaction。
+        if (snapshot.compactsThroughSequence() <= 0) {
+            throw new IllegalArgumentException("snapshot must cover at least one historical event");
+        }
+        CompactionPayload payload = new CompactionPayload(summaryContent, strategyVersion);
+        SessionPayloadCodec.EncodedPayload encoded = payloadCodec.encodeMessage(payload);
+        long createdAt = now();
+        long newSequenceNo = Math.addExact(snapshot.expectedLastSequenceNo(), 1L);
+        SessionMessageRecord compaction = new SessionMessageRecord(
+                idGenerator.nextId(),
+                snapshot.sessionId(),
+                newSequenceNo,
+                SessionMessageType.COMPACTION,
+                encoded.payloadVersion(),
+                encoded.payloadJson(),
+                snapshot.compactsThroughSequence(),
+                createdAt
+        );
+
+        try (SqlSession sqlSession = database.openSession()) {
+            try {
+                SessionPersistenceMapper sessionMapper = sqlSession.getMapper(SessionPersistenceMapper.class);
+                SessionMessagePersistenceMapper messageMapper = sqlSession.getMapper(SessionMessagePersistenceMapper.class);
+                // 同时比较版本和最后序号，任一历史或元数据变化都会使本次旧摘要失效。
+                int advanced = sessionMapper.advanceForMessageAppend(
+                        snapshot.sessionId(),
+                        snapshot.expectedSessionVersion(),
+                        snapshot.expectedLastSequenceNo(),
+                        newSequenceNo,
+                        snapshot.sessionStatus(),
+                        createdAt
+                );
+                if (advanced == 0) {
+                    // 条件更新未命中时禁止插入检查点，避免旧摘要覆盖新历史。
+                    sqlSession.rollback();
+                    return new CompactionCommitResult.StaleSnapshot();
+                }
+                requireExactlyOne(messageMapper.insert(compaction), "insert compaction message");
+                sqlSession.commit();
+                return new CompactionCommitResult.Committed(snapshot.compactsThroughSequence());
+            } catch (RuntimeException exception) {
+                // 插入或编码相关异常时回滚已推进的会话序号，保持两张表原子一致。
+                sqlSession.rollback();
+                throw exception;
+            }
         }
     }
 
@@ -526,7 +616,7 @@ public final class SessionConversationStore {
         return systemPayload.toMessage();
     }
 
-    /** 解码最新 compaction 摘要，并以受控 system 上下文回灌。 */
+    /** 解码最新 compaction 摘要，并以带固定安全前缀的 assistant 历史上下文回灌。 */
     private Message toCompactionMessage(SessionMessageRecord record) {
         return requireCompactionPayload(record).toContextMessage();
     }

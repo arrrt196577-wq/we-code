@@ -14,5 +14,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-java -jar "%WECODE_JAR%" %*
+chcp 65001 >nul
+
+java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -jar "%WECODE_JAR%" %*
 exit /b %errorlevel%

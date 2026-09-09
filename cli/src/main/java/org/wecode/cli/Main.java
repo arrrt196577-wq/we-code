@@ -7,6 +7,8 @@ import org.wecode.cli.config.YamlConfigLoader;
 import org.wecode.cli.interaction.InteractiveSessionRunner;
 import org.wecode.cli.interaction.ChatModelTitleGenerator;
 import org.wecode.cli.interaction.SessionInteractionHandler;
+import org.wecode.agent.compaction.CompactionService;
+import org.wecode.agent.compaction.CompactionSummaryGenerator;
 import org.wecode.cli.project.WorkspaceStartupResult;
 import org.wecode.cli.project.WorkspaceStartupService;
 import org.wecode.cli.project.WorkspaceResolver;
@@ -113,10 +115,12 @@ public final class Main implements Callable<Integer> {
         ResolvedProviderConfig provider = ConfigResolver.resolveActiveProvider(config.llm());
         // 使用供应商定义创建本次会话共用的聊天模型实例。
         ChatModel chatModel = ChatModelFactory.create(provider.toProviderDefinition());
+        // 复用同一个会话存储入口，确保正常对话和手动压缩使用一致的数据库访问边界。
+        SessionConversationStore conversationStore = new SessionConversationStore(database);
         // 组装负责处理用户交互、会话持久化和工具调用的会话处理器。
         SessionInteractionHandler interactionHandler = new SessionInteractionHandler(
-                // 提供当前数据库对应的会话消息读写能力。
-                new SessionConversationStore(database),
+            // 提供当前数据库对应的会话消息读写能力。
+                conversationStore,
                 // 绑定本次交互所属的工作区记录。
                 workspace,
                 // 使用当前聊天模型为新会话生成标题。
@@ -126,7 +130,9 @@ public final class Main implements Callable<Integer> {
                 // 注册本地文件读写、搜索等 Agent 工具。
                 createToolRegistry(),
                 // 向工具提供已规范化的当前工作区路径上下文。
-                ToolContext.of(workspaceResolver.resolve(Path.of("")).workspacePath())
+                ToolContext.of(workspaceResolver.resolve(Path.of("")).workspacePath()),
+                // 使用与当前会话相同的模型和存储入口生成并提交历史摘要。
+                new CompactionService(conversationStore, new CompactionSummaryGenerator(chatModel))
         ); // 完成会话处理器的依赖装配。
 
         // 工作区可用后复用同一个输入读取器进入完整交互会话，避免 BufferedReader 预读造成输入丢失。

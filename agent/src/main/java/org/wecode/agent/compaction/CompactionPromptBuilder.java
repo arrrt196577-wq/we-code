@@ -33,7 +33,8 @@ public final class CompactionPromptBuilder {
             exact file paths and identifiers when known, and prefer terse bullets over paragraphs.
 
             Do not answer the conversation itself. Do not mention that you are summarizing, compacting, or
-            merging context. Respond in the same language as the conversation.
+            merging context. Write section content in the same language as the conversation, but preserve every
+            Markdown heading from the template verbatim.
             """.stripIndent().trim();
 
     /** OpenCode 风格的固定摘要输出模板。 */
