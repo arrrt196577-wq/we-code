@@ -2,6 +2,61 @@
 
 本文记录当前阶段明确暂缓、但后续必须重新评估的设计与实现问题。暂缓不代表问题已经解决。
 
+## Agent 运行时与阶段扩展渐进接入
+
+### 当前阶段决定
+
+- 已对齐 [运行时与阶段扩展架构](agent-lifecycle-hooks.md)，尚未接入 AgentLoop。
+- AgentLoop 保留兼容入口，每次 run 创建独立 AgentRuntime；Runtime 是状态唯一写入者。
+- Hook 表示类型化阶段方法，AgentMiddleware 实现一个或多个入口，AgentExtensions 统一注册、冻结和分发。
+- Lifecycle 单向发布运行事实；AgentExecutionListener 保留为核心持久化 Port。
+- 已有 AgentRunState 只有组合校验，没有迁移 API；结构化结果尚未接入。
+- hook 模块及 HookPoint 保留现状，暂不继续实现旧 HookHandler、HookRegistry、HookRuntime，也不另建 Pipeline 引擎。
+
+### 明确暂缓
+
+- afterTool 具体加工范围、raw/effective 表示、投影存储和恢复协议，后续专门讨论；当前只确定入口位置。
+- 自动压缩协调、重建上限和失败处理不是框架接入前提，不强制经过旧 CONTEXT_ACTION 控制点。
+- 暂不开放任意模型响应或工具参数改写、模型 Around、重试、任意跳转、热加载及动态排序。
+- 暂不提取通用扩展模块，不承诺 Lifecycle 跨进程必达或作为恢复事实源。
+
+### 实施前必须处理
+
+- 统一 Run/Turn、模型调用与 completedSteps 的计数语义，定义只读 Snapshot、合法迁移 API 和必要领域结果。
+- 各 Hook 逐个确定 Context/Result、数据合并与可见性、短路及失败规则，不使用万能 Result 或全局决策合并器。
+- 定义统一收口和 afterRun 清理失败处理，原始异常不能被覆盖，已发生的副作用不能重做或伪装未执行。
+- 保持现有模型与工具持久化顺序；最终有效请求或工具输入必须通过核心校验。
+- 验证空扩展兼容性、注册执行顺序、Run 隔离、停止后无后续副作用，以及取消、异常和持久化失败路径。
+- 自动压缩重新接入前处理本文既有压缩与预算风险；数据加工开放前明确消费投影与持久化事实的边界。
+
+### 重新评估触发条件
+
+- 开始迁移 Runtime、接入具体 Hook 或 Lifecycle。
+- 开始设计 afterTool 处理、自动压缩、重试或工具输入加工。
+- Agent 之外出现真实扩展框架复用需求。
+
+## Memory 架构规划与暂缓范围
+
+### 当前阶段决定
+
+- 已形成 [Memory 架构规划](memory-architecture.md) 和 [规划图](diagrams/memory-architecture.md)，尚未实现 Memory 运行逻辑或数据库表。
+- 建议先完成上下文边界及 USER/WORKSPACE 显式存取、隔离和撤销，再开放 Repository 共享和后台语义提取。
+- 暂缓跨 clone 自动共享、云同步、知识图谱、向量数据库、分支合并后自动晋升，以及未经审核的隐含偏好自动生效。
+
+### 实施前必须处理
+
+- Repository/worktree 身份不能由当前 cwd 或 remote URL hash 直接替代；关联仓库不得扩大既有 ToolContext 边界。
+- 动态 Memory 不得写回 session 历史参与压缩/提取；旧 session 的固定 SYSTEM 需要版本化宿主策略，避免新信任规则只对新会话有效。
+- 自动提取必须有原始证据、同事务入队、幂等、租约和撤销保护；不能仅用内存异步回调。
+- AgentLoop 达到 maxSteps 仍正常返回，handler 随后标为 IDLE。经验提取必须先引入结束原因；IDLE 或无工具调用不能证明任务成功。
+- Memory 提取使用结构化输出前，需补 Provider 能力声明及严格验证，防止请求选项被默认实现忽略。
+
+### 重新评估触发条件
+
+- 开始实现任一 Memory 阶段，按规划同步更新状态、现状说明和对应图表。
+- 开启自动生效、跨 workspace/repository 共享、后台 worker、任务跨 session 续接或历史经验检索。
+- 有评测证据显示关键词召回不足或记忆规模超过有界检索能力时，再评估 embedding；不能以此替代隔离校验。
+
 ## 上下文窗口 token 估算与输出预算
 
 ### 当前阶段决定

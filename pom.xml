@@ -14,6 +14,7 @@
 
     <modules>
         <module>id</module>
+        <module>hook</module>
         <module>cli</module>
         <module>agent</module>
         <module>tools</module>
@@ -80,6 +81,11 @@
             <dependency>
                 <groupId>org.wecode</groupId>
                 <artifactId>id</artifactId>
+                <version>${we-code.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.wecode</groupId>
+                <artifactId>hook</artifactId>
                 <version>${we-code.version}</version>
             </dependency>
             <dependency>

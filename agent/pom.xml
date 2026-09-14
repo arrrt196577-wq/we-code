@@ -17,6 +17,10 @@
     <dependencies>
         <dependency>
             <groupId>org.wecode</groupId>
+            <artifactId>hook</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.wecode</groupId>
             <artifactId>llm</artifactId>
         </dependency>
         <dependency>
